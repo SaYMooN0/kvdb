@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_executable(kvdb_manager
         main.cpp
+        ../server_project/contracts/table_name.cpp
+        ../server_project/contracts/table_name.h
 )
 
 target_compile_definitions(kvdb_manager PRIVATE KVDB_CMAKE_PATH="${CMAKE_COMMAND}")
