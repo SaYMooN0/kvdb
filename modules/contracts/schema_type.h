@@ -7,7 +7,7 @@
 #include "kvdb_exception.h"
 
 namespace kvdb::contracts {
-    class ColType final
+    class SchemaType final
     {
     public:
         enum class PrimitiveKind : std::uint8_t
@@ -23,116 +23,116 @@ namespace kvdb::contracts {
         enum class WrapperForm : std::uint8_t
         {
             Plain = 0,                     // T
-            Nullable = 1,                 // nullable(T)
-            Array = 2,                    // array(T)
-            ArrayOfNullable = 3,          // array(nullable(T))
-            NullableArray = 4,            // nullable(array(T))
-            NullableArrayOfNullable = 5   // nullable(array(nullable(T)))
+            Nullable = 1,                  // nullable(T)
+            Array = 2,                     // array(T)
+            ArrayOfNullable = 3,           // array(nullable(T))
+            NullableArray = 4,             // nullable(array(T))
+            NullableArrayOfNullable = 5    // nullable(array(nullable(T)))
         };
 
     public:
-        [[nodiscard]] static ColType Uuid() {
-            return Make(PrimitiveKind::Uuid, WrapperForm::Plain, 0);
+        [[nodiscard]] static SchemaType Uuid() {
+            return make(PrimitiveKind::Uuid, WrapperForm::Plain, 0);
         }
 
-        [[nodiscard]] static ColType Bool() {
-            return Make(PrimitiveKind::Bool, WrapperForm::Plain, 0);
+        [[nodiscard]] static SchemaType Bool() {
+            return make(PrimitiveKind::Bool, WrapperForm::Plain, 0);
         }
 
-        [[nodiscard]] static ColType CharSeq(std::uint32_t maxLength) {
+        [[nodiscard]] static SchemaType CharSeq(std::uint32_t maxLength) {
             if (maxLength < 1 || maxLength > 65535) {
                 throw KvdbException::invalidCharSeqLength(
                     "Requested max length: " + std::to_string(maxLength) + "."
                 );
             }
 
-            return Make(
+            return make(
                 PrimitiveKind::CharSeq,
                 WrapperForm::Plain,
                 static_cast<std::uint16_t>(maxLength)
             );
         }
 
-        [[nodiscard]] static ColType Int(std::uint32_t byteCount) {
+        [[nodiscard]] static SchemaType Int(std::uint32_t byteCount) {
             if (byteCount < 1 || byteCount > 8) {
                 throw KvdbException::invalidIntByteCount(
                     "Requested byte count: " + std::to_string(byteCount) + "."
                 );
             }
 
-            return Make(
+            return make(
                 PrimitiveKind::Int,
                 WrapperForm::Plain,
                 static_cast<std::uint16_t>(byteCount)
             );
         }
 
-        [[nodiscard]] static ColType UInt(std::uint32_t byteCount) {
+        [[nodiscard]] static SchemaType UInt(std::uint32_t byteCount) {
             if (byteCount < 1 || byteCount > 8) {
                 throw KvdbException::invalidUIntByteCount(
                     "Requested byte count: " + std::to_string(byteCount) + "."
                 );
             }
 
-            return Make(
+            return make(
                 PrimitiveKind::UInt,
                 WrapperForm::Plain,
                 static_cast<std::uint16_t>(byteCount)
             );
         }
 
-        [[nodiscard]] ColType AsNullable() const {
-            switch (form()) {
+        [[nodiscard]] SchemaType asNullable() const {
+            switch (wrapperForm()) {
                 case WrapperForm::Plain:
-                    return Make(primitive(), WrapperForm::Nullable, parameter());
+                    return make(primitiveKind(), WrapperForm::Nullable, parameter());
 
                 case WrapperForm::Array:
-                    return Make(primitive(), WrapperForm::NullableArray, parameter());
+                    return make(primitiveKind(), WrapperForm::NullableArray, parameter());
 
                 case WrapperForm::ArrayOfNullable:
-                    return Make(primitive(), WrapperForm::NullableArrayOfNullable, parameter());
+                    return make(primitiveKind(), WrapperForm::NullableArrayOfNullable, parameter());
 
                 case WrapperForm::Nullable:
                 case WrapperForm::NullableArray:
                 case WrapperForm::NullableArrayOfNullable:
                     throw KvdbException::nestedNullableType(
-                        "Attempted type composition: nullable(" + ToString() + ")."
+                        "Attempted type composition: nullable(" + toString() + ")."
                     );
             }
 
             throw KvdbException::programBug(
-                "Unsupported wrapper form in ColType::AsNullable()."
+                "Unsupported wrapper form in SchemaType::asNullable()."
             );
         }
 
-        [[nodiscard]] ColType AsArray() const {
-            switch (form()) {
+        [[nodiscard]] SchemaType asArray() const {
+            switch (wrapperForm()) {
                 case WrapperForm::Plain:
-                    return Make(primitive(), WrapperForm::Array, parameter());
+                    return make(primitiveKind(), WrapperForm::Array, parameter());
 
                 case WrapperForm::Nullable:
-                    return Make(primitive(), WrapperForm::ArrayOfNullable, parameter());
+                    return make(primitiveKind(), WrapperForm::ArrayOfNullable, parameter());
 
                 case WrapperForm::Array:
                 case WrapperForm::ArrayOfNullable:
                 case WrapperForm::NullableArray:
                 case WrapperForm::NullableArrayOfNullable:
                     throw KvdbException::nestedArrayType(
-                        "Attempted type composition: array(" + ToString() + ")."
+                        "Attempted type composition: array(" + toString() + ")."
                     );
             }
 
             throw KvdbException::programBug(
-                "Unsupported wrapper form in ColType::AsArray()."
+                "Unsupported wrapper form in SchemaType::asArray()."
             );
         }
 
-        [[nodiscard]] PrimitiveKind primitive() const noexcept {
+        [[nodiscard]] PrimitiveKind primitiveKind() const noexcept {
             return static_cast<PrimitiveKind>(raw_ & PrimitiveMask);
         }
 
-        [[nodiscard]] WrapperForm form() const noexcept {
-            return static_cast<WrapperForm>((raw_ >> FormShift) & FormMaskValue);
+        [[nodiscard]] WrapperForm wrapperForm() const noexcept {
+            return static_cast<WrapperForm>((raw_ >> WrapperFormShift) & WrapperFormMaskValue);
         }
 
         [[nodiscard]] std::uint16_t parameter() const noexcept {
@@ -140,7 +140,7 @@ namespace kvdb::contracts {
         }
 
         [[nodiscard]] bool hasArray() const noexcept {
-            switch (form()) {
+            switch (wrapperForm()) {
                 case WrapperForm::Array:
                 case WrapperForm::ArrayOfNullable:
                 case WrapperForm::NullableArray:
@@ -156,7 +156,7 @@ namespace kvdb::contracts {
         }
 
         [[nodiscard]] bool hasOuterNullable() const noexcept {
-            switch (form()) {
+            switch (wrapperForm()) {
                 case WrapperForm::Nullable:
                 case WrapperForm::NullableArray:
                 case WrapperForm::NullableArrayOfNullable:
@@ -172,7 +172,7 @@ namespace kvdb::contracts {
         }
 
         [[nodiscard]] bool hasInnerNullable() const noexcept {
-            switch (form()) {
+            switch (wrapperForm()) {
                 case WrapperForm::ArrayOfNullable:
                 case WrapperForm::NullableArrayOfNullable:
                     return true;
@@ -198,35 +198,35 @@ namespace kvdb::contracts {
         void throwIfNotAllowedAsKey() const {
             if (hasArray()) {
                 throw KvdbException::arrayKeyType(
-                    "Attempted key type: " + ToString() + "."
+                    "Attempted key type: " + toString() + "."
                 );
             }
 
             if (hasAnyNullable()) {
                 throw KvdbException::nullableKeyType(
-                    "Attempted key type: " + ToString() + "."
+                    "Attempted key type: " + toString() + "."
                 );
             }
         }
 
         [[nodiscard]] bool isCharSeq() const noexcept {
-            return primitive() == PrimitiveKind::CharSeq;
+            return primitiveKind() == PrimitiveKind::CharSeq;
         }
 
         [[nodiscard]] bool isInt() const noexcept {
-            return primitive() == PrimitiveKind::Int;
+            return primitiveKind() == PrimitiveKind::Int;
         }
 
         [[nodiscard]] bool isUInt() const noexcept {
-            return primitive() == PrimitiveKind::UInt;
+            return primitiveKind() == PrimitiveKind::UInt;
         }
 
         [[nodiscard]] bool isBool() const noexcept {
-            return primitive() == PrimitiveKind::Bool;
+            return primitiveKind() == PrimitiveKind::Bool;
         }
 
         [[nodiscard]] bool isUuid() const noexcept {
-            return primitive() == PrimitiveKind::Uuid;
+            return primitiveKind() == PrimitiveKind::Uuid;
         }
 
         [[nodiscard]] bool isFixedSize() const noexcept {
@@ -234,7 +234,7 @@ namespace kvdb::contracts {
                 return false;
             }
 
-            if (primitive() == PrimitiveKind::CharSeq) {
+            if (primitiveKind() == PrimitiveKind::CharSeq) {
                 return false;
             }
 
@@ -244,25 +244,25 @@ namespace kvdb::contracts {
         [[nodiscard]] std::uint32_t fixedSizeInBytes() const {
             if (!isFixedSize()) {
                 throw KvdbException::programBug(
-                    "Fixed size was requested for a variable-size type.",
-                    "Type: " + ToString()
+                    "Fixed size was requested for a variable-size schema type.",
+                    "Type: " + toString()
                 );
             }
 
             std::uint32_t size = primitiveFixedSizeInBytes();
 
-            if (form() == WrapperForm::Nullable) {
-                size += 1; // null flag
+            if (wrapperForm() == WrapperForm::Nullable) {
+                size += 1;
             }
 
             return size;
         }
 
         [[nodiscard]] std::uint16_t charSeqMaxLength() const {
-            if (primitive() != PrimitiveKind::CharSeq) {
+            if (primitiveKind() != PrimitiveKind::CharSeq) {
                 throw KvdbException::programBug(
-                    "charSeqMaxLength() was called for a non-charseq type.",
-                    "Type: " + ToString()
+                    "charSeqMaxLength() was called for a non-charseq schema type.",
+                    "Type: " + toString()
                 );
             }
 
@@ -270,10 +270,10 @@ namespace kvdb::contracts {
         }
 
         [[nodiscard]] std::uint8_t integerByteCount() const {
-            if (primitive() != PrimitiveKind::Int && primitive() != PrimitiveKind::UInt) {
+            if (primitiveKind() != PrimitiveKind::Int && primitiveKind() != PrimitiveKind::UInt) {
                 throw KvdbException::programBug(
-                    "integerByteCount() was called for a non-integer type.",
-                    "Type: " + ToString()
+                    "integerByteCount() was called for a non-integer schema type.",
+                    "Type: " + toString()
                 );
             }
 
@@ -284,10 +284,10 @@ namespace kvdb::contracts {
             return raw_;
         }
 
-        [[nodiscard]] std::string ToString() const {
+        [[nodiscard]] std::string toString() const {
             const std::string leaf = leafToString();
 
-            switch (form()) {
+            switch (wrapperForm()) {
                 case WrapperForm::Plain:
                     return leaf;
 
@@ -308,40 +308,40 @@ namespace kvdb::contracts {
             }
 
             throw KvdbException::programBug(
-                "Unsupported wrapper form in ColType::ToString()."
+                "Unsupported wrapper form in SchemaType::toString()."
             );
         }
 
     private:
         static constexpr std::uint32_t PrimitiveMask = 0b111u;
-        static constexpr std::uint32_t FormShift = 3u;
-        static constexpr std::uint32_t FormMaskValue = 0b111u;
+        static constexpr std::uint32_t WrapperFormShift = 3u;
+        static constexpr std::uint32_t WrapperFormMaskValue = 0b111u;
         static constexpr std::uint32_t ParamShift = 6u;
         static constexpr std::uint32_t ParamMaskValue = 0xFFFFu;
 
     private:
-        explicit constexpr ColType(std::uint32_t raw) noexcept
+        explicit constexpr SchemaType(std::uint32_t raw) noexcept
             : raw_(raw) {
         }
 
-        [[nodiscard]] static ColType Make(
+        [[nodiscard]] static SchemaType make(
             PrimitiveKind primitiveKind,
             WrapperForm wrapperForm,
             std::uint16_t parameter
         ) {
             const auto primitiveBits = static_cast<std::uint32_t>(primitiveKind);
-            const auto formBits = static_cast<std::uint32_t>(wrapperForm);
+            const auto wrapperBits = static_cast<std::uint32_t>(wrapperForm);
 
             const std::uint32_t raw =
                 primitiveBits |
-                (formBits << FormShift) |
+                (wrapperBits << WrapperFormShift) |
                 (static_cast<std::uint32_t>(parameter) << ParamShift);
 
-            return ColType(raw);
+            return SchemaType(raw);
         }
 
         [[nodiscard]] std::string leafToString() const {
-            switch (primitive()) {
+            switch (primitiveKind()) {
                 case PrimitiveKind::Uuid:
                     return "uuid";
 
@@ -359,12 +359,12 @@ namespace kvdb::contracts {
             }
 
             throw KvdbException::programBug(
-                "Unsupported primitive kind in ColType::leafToString()."
+                "Unsupported primitive kind in SchemaType::leafToString()."
             );
         }
 
         [[nodiscard]] std::uint32_t primitiveFixedSizeInBytes() const {
-            switch (primitive()) {
+            switch (primitiveKind()) {
                 case PrimitiveKind::Uuid:
                     return 16;
 
@@ -377,13 +377,13 @@ namespace kvdb::contracts {
 
                 case PrimitiveKind::CharSeq:
                     throw KvdbException::programBug(
-                        "primitiveFixedSizeInBytes() was called for charseq.",
-                        "Type: " + ToString()
+                        "primitiveFixedSizeInBytes() was called for charseq schema type.",
+                        "Type: " + toString()
                     );
             }
 
             throw KvdbException::programBug(
-                "Unsupported primitive kind in ColType::primitiveFixedSizeInBytes()."
+                "Unsupported primitive kind in SchemaType::primitiveFixedSizeInBytes()."
             );
         }
 

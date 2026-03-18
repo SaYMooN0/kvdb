@@ -1,0 +1,5 @@
+﻿add_subdirectory(contracts)
+add_subdirectory(engine)
+add_subdirectory(query_parser)
+add_subdirectory(response_constructor)
+add_subdirectory(server)
