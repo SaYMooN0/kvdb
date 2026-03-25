@@ -55,8 +55,8 @@ namespace kvdb {
             return err_codes::isResponseConstructorError(code_);
         }
 
-        [[nodiscard]] bool isServerError() const noexcept {
-            return err_codes::isServerError(code_);
+        [[nodiscard]] bool isAccessInterfaceError() const noexcept {
+            return err_codes::isAccessInterfaceError(code_);
         }
 
     public:
@@ -274,13 +274,13 @@ namespace kvdb {
             );
         }
 
-        [[nodiscard]] static KvdbException serverError(
+        [[nodiscard]] static KvdbException accessInterfaceError(
             std::string msg,
             std::string details = {},
             std::optional<std::string> fixRecommendation = std::nullopt
         ) {
             return make(
-                err_codes::server::Generic,
+                err_codes::accessInterface::Generic,
                 std::move(msg),
                 std::move(details),
                 std::move(fixRecommendation)

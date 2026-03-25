@@ -3,8 +3,8 @@
 
 #include "i_modules.h"
 
-namespace kvdb::modules::server::standard {
-    class StandardServer final : public kvdb::contracts::IServer
+namespace kvdb::modules::access_interface::standard {
+    class StandardAccessInterface final : public kvdb::contracts::IAccessInterface
     {
     public:
         void start(
@@ -12,7 +12,7 @@ namespace kvdb::modules::server::standard {
             kvdb::contracts::IEngine& engine,
             kvdb::contracts::IResponseConstructor& responseConstructor) override
         {
-            std::cout << "Server started\n";
+            std::cout << "Access Interface started\n";
             std::cout << "Type a query. Type 'exit' to stop.\n";
 
             std::string rawQuery;
@@ -34,17 +34,17 @@ namespace kvdb::modules::server::standard {
                 std::cout << response << '\n';
             }
 
-            std::cout << "Server stopped\n";
+            std::cout << "Access Interface stopped\n";
         }
     };
 }
 
 extern "C" __declspec(dllexport)
-kvdb::contracts::IServer* create_server() {
-    return new kvdb::modules::server::standard::StandardServer();
+kvdb::contracts::IAccessInterface* create_access_interface() {
+    return new kvdb::modules::access_interface::standard::StandardAccessInterface();
 }
 
 extern "C" __declspec(dllexport)
-void destroy_server(kvdb::contracts::IServer* ptr) {
+void destroy_access_interface(kvdb::contracts::IAccessInterface* ptr) {
     delete ptr;
 }

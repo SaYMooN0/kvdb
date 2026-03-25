@@ -11,5 +11,5 @@ set(KVDB_MODULES_OUTPUT_DIR "${KVDB_DIST_DIR}/modules")
 set(KVDB_LIB_OUTPUT_DIR "${KVDB_DIST_DIR}/lib")
 
 add_subdirectory(modules)
-add_subdirectory(server_instance_exec)
+add_subdirectory(db_instance)
 add_subdirectory(manager_project)

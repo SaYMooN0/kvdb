@@ -1,9 +1,9 @@
-﻿#pragma once
+#pragma once
 
 #include <filesystem>
 #include <string>
 
-namespace kvdb::server_instance_exec {
+namespace kvdb::db_instance {
     class DynamicLibrary final
     {
     public:

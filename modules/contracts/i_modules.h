@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 
@@ -24,10 +24,10 @@ namespace kvdb::contracts {
         virtual std::string buildResponse(const std::string& engineResult) = 0;
     };
 
-    class IServer
+    class IAccessInterface
     {
     public:
-        virtual ~IServer() = default;
+        virtual ~IAccessInterface() = default;
 
         virtual void start(
             IQueryParser& queryParser,

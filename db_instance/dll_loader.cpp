@@ -1,4 +1,4 @@
-﻿#include "dll_loader.h"
+#include "dll_loader.h"
 
 #include <stdexcept>
 #include <utility>
@@ -7,7 +7,7 @@
 #include <windows.h>
 #endif
 
-namespace kvdb::server_instance_exec {
+namespace kvdb::db_instance {
     DynamicLibrary::DynamicLibrary(const std::filesystem::path& path) {
         load(path);
     }

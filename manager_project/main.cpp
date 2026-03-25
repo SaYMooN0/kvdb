@@ -27,10 +27,10 @@ struct Instance {
 };
 
 #ifdef _WIN32
-constexpr const char* kServerInstanceExecFileName = "server_instance_exec.exe";
+constexpr const char* kDbInstanceFileName = "db_instance.exe";
 constexpr const char* kModuleExtension = ".dll";
 #else
-constexpr const char* kServerInstanceExecFileName = "server_instance_exec";
+constexpr const char* kDbInstanceFileName = "db_instance";
 constexpr const char* kModuleExtension = ".so";
 #endif
 
@@ -117,8 +117,8 @@ fs::path getBuiltModulePath(const std::string& moduleName, const std::string& im
     return getDistRoot() / "modules" / buildModuleFileName(moduleName, implName);
 }
 
-fs::path getBuiltServerInstanceExecPath() {
-    return getDistRoot() / kServerInstanceExecFileName;
+fs::path getBuiltDbInstancePath() {
+    return getDistRoot() / kDbInstanceFileName;
 }
 
 bool ensureFileExists(const fs::path& path, const std::string& description) {
@@ -145,7 +145,7 @@ bool writeInstanceSettings(
     const fs::path& instanceDir,
     const std::string& engineDllFileName,
     const std::string& parserDllFileName,
-    const std::string& serverDllFileName,
+    const std::string& accessInterfaceDllFileName,
     const std::string& responseDllFileName
 ) {
     const fs::path settingsPath = instanceDir / kInstanceSettingsFileName;
@@ -158,7 +158,7 @@ bool writeInstanceSettings(
 
     output << engineDllFileName << '\n';
     output << parserDllFileName << '\n';
-    output << serverDllFileName << '\n';
+    output << accessInterfaceDllFileName << '\n';
     output << responseDllFileName << '\n';
 
     return true;
@@ -170,7 +170,7 @@ bool createInstance(
     const std::string& parserImpl,
     const std::string& engineImpl,
     const std::string& responseImpl,
-    const std::string& serverImpl
+    const std::string& accessInterfaceImpl
 ) {
     const fs::path instanceDir = fs::path(path) / name;
 
@@ -179,14 +179,14 @@ bool createInstance(
         return false;
     }
 
-    const fs::path builtExecPath = getBuiltServerInstanceExecPath();
+    const fs::path builtExecPath = getBuiltDbInstancePath();
 
     const fs::path builtEngineDllPath = getBuiltModulePath("engine", engineImpl);
     const fs::path builtParserDllPath = getBuiltModulePath("query_parser", parserImpl);
-    const fs::path builtServerDllPath = getBuiltModulePath("server", serverImpl);
+    const fs::path builtAccessInterfaceDllPath = getBuiltModulePath("access_interface", accessInterfaceImpl);
     const fs::path builtResponseDllPath = getBuiltModulePath("response_constructor", responseImpl);
 
-    if (!ensureFileExists(builtExecPath, "server_instance_exec executable"))
+    if (!ensureFileExists(builtExecPath, "db_instance executable"))
         return false;
 
     if (!ensureFileExists(builtEngineDllPath, "engine module"))
@@ -195,7 +195,7 @@ bool createInstance(
     if (!ensureFileExists(builtParserDllPath, "query_parser module"))
         return false;
 
-    if (!ensureFileExists(builtServerDllPath, "server module"))
+    if (!ensureFileExists(builtAccessInterfaceDllPath, "access_interface module"))
         return false;
 
     if (!ensureFileExists(builtResponseDllPath, "response_constructor module"))
@@ -209,11 +209,11 @@ bool createInstance(
         return false;
     }
 
-    const fs::path instanceExecPath = instanceDir / kServerInstanceExecFileName;
+    const fs::path instanceExecPath = instanceDir / kDbInstanceFileName;
 
     const std::string engineDllFileName = builtEngineDllPath.filename().string();
     const std::string parserDllFileName = builtParserDllPath.filename().string();
-    const std::string serverDllFileName = builtServerDllPath.filename().string();
+    const std::string accessInterfaceDllFileName = builtAccessInterfaceDllPath.filename().string();
     const std::string responseDllFileName = builtResponseDllPath.filename().string();
 
     if (!copyFileChecked(builtExecPath, instanceExecPath))
@@ -225,7 +225,7 @@ bool createInstance(
     if (!copyFileChecked(builtParserDllPath, instanceDir / parserDllFileName))
         return false;
 
-    if (!copyFileChecked(builtServerDllPath, instanceDir / serverDllFileName))
+    if (!copyFileChecked(builtAccessInterfaceDllPath, instanceDir / accessInterfaceDllFileName))
         return false;
 
     if (!copyFileChecked(builtResponseDllPath, instanceDir / responseDllFileName))
@@ -235,7 +235,7 @@ bool createInstance(
         instanceDir,
         engineDllFileName,
         parserDllFileName,
-        serverDllFileName,
+        accessInterfaceDllFileName,
         responseDllFileName))
         return false;
 
@@ -257,7 +257,7 @@ void runInstance(const std::string& name) {
     for (const auto& i : instances) {
         if (i.name == name) {
             const fs::path instanceDir = fs::path(i.path) / i.name;
-            const fs::path execPath = instanceDir / kServerInstanceExecFileName;
+            const fs::path execPath = instanceDir / kDbInstanceFileName;
 
             if (!fs::exists(execPath)) {
                 std::cout << "Instance executable not found: " << execPath << "\n";
@@ -303,7 +303,7 @@ void modulesCommand() {
     listModules("query_parser");
     listModules("engine");
     listModules("response_constructor");
-    listModules("server");
+    listModules("access_interface");
 }
 
 Command constructInitCommand() {
@@ -314,7 +314,7 @@ Command constructInitCommand() {
         if (!(ss >> path >> name)) {
             std::cout << "Usage:\n";
             std::cout << "init <path> <name> "
-                         "[-q:parser] [-e:engine] [-r:response] [-s:server]\n";
+                         "[-q:parser] [-e:engine] [-r:response] [-a:access_interface]\n";
             return;
         }
 
@@ -329,7 +329,7 @@ Command constructInitCommand() {
         std::string parser = "standard";
         std::string engine = "standard";
         std::string response = "standard";
-        std::string server = "standard";
+        std::string accessInterface = "standard";
 
         std::string arg;
 
@@ -340,15 +340,15 @@ Command constructInitCommand() {
                 engine = arg.substr(3);
             else if (arg.starts_with("-r:"))
                 response = arg.substr(3);
-            else if (arg.starts_with("-s:"))
-                server = arg.substr(3);
+            else if (arg.starts_with("-a:"))
+                accessInterface = arg.substr(3);
             else {
                 std::cout << "Unknown argument: " << arg << "\n";
                 return;
             }
         }
 
-        if (createInstance(path, name, parser, engine, response, server))
+        if (createInstance(path, name, parser, engine, response, accessInterface))
             std::cout << "Instance created\n";
     };
 }

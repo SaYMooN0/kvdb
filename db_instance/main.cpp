@@ -17,13 +17,13 @@
 
 namespace fs = std::filesystem;
 
-namespace kvdb::server_instance_exec {
+namespace kvdb::db_instance {
     namespace {
         struct InstanceSettings final
         {
             std::string engineDllFileName;
             std::string queryParserDllFileName;
-            std::string serverDllFileName;
+            std::string accessInterfaceDllFileName;
             std::string responseConstructorDllFileName;
         };
 
@@ -92,14 +92,14 @@ namespace kvdb::server_instance_exec {
                     "instance_settings.txt must contain exactly 4 non-empty lines:\n"
                     "1) engine DLL file name\n"
                     "2) query_parser DLL file name\n"
-                    "3) server DLL file name\n"
+                    "3) access_interface DLL file name\n"
                     "4) response_constructor DLL file name");
             }
 
             return InstanceSettings{
                 .engineDllFileName = values[0],
                 .queryParserDllFileName = values[1],
-                .serverDllFileName = values[2],
+                .accessInterfaceDllFileName = values[2],
                 .responseConstructorDllFileName = values[3]
             };
         }
@@ -188,8 +188,8 @@ namespace kvdb::server_instance_exec {
             const fs::path queryParserDllPath =
                 resolveDllPath(executableDir, settings.queryParserDllFileName);
 
-            const fs::path serverDllPath =
-                resolveDllPath(executableDir, settings.serverDllFileName);
+            const fs::path accessInterfaceDllPath =
+                resolveDllPath(executableDir, settings.accessInterfaceDllFileName);
 
             const fs::path responseConstructorDllPath =
                 resolveDllPath(executableDir, settings.responseConstructorDllFileName);
@@ -197,7 +197,7 @@ namespace kvdb::server_instance_exec {
             std::cout << "Loading modules...\n";
             std::cout << "  engine: " << engineDllPath.string() << '\n';
             std::cout << "  query_parser: " << queryParserDllPath.string() << '\n';
-            std::cout << "  server: " << serverDllPath.string() << '\n';
+            std::cout << "  access_interface: " << accessInterfaceDllPath.string() << '\n';
             std::cout << "  response_constructor: " << responseConstructorDllPath.string() << '\n';
 
             LoadedModule<kvdb::contracts::IEngine> engineModule(
@@ -215,32 +215,32 @@ namespace kvdb::server_instance_exec {
                 "create_response_constructor",
                 "destroy_response_constructor");
 
-            LoadedModule<kvdb::contracts::IServer> serverModule(
-                serverDllPath,
-                "create_server",
-                "destroy_server");
+            LoadedModule<kvdb::contracts::IAccessInterface> accessInterfaceModule(
+                accessInterfaceDllPath,
+                "create_access_interface",
+                "destroy_access_interface");
 
-            std::cout << "Starting server...\n";
+            std::cout << "Starting access interface...\n";
 
-            serverModule.get().start(
+            accessInterfaceModule.get().start(
                 queryParserModule.get(),
                 engineModule.get(),
                 responseConstructorModule.get());
 
-            std::cout << "Server stopped.\n";
+            std::cout << "Access interface stopped.\n";
             return 0;
         }
         catch (const std::exception& ex) {
-            std::cerr << "server_instance_exec error: " << ex.what() << '\n';
+            std::cerr << "db_instance error: " << ex.what() << '\n';
             return 1;
         }
         catch (...) {
-            std::cerr << "server_instance_exec error: unknown exception\n";
+            std::cerr << "db_instance error: unknown exception\n";
             return 1;
         }
     }
 }
 
 int main(int argc, char** argv) {
-    return kvdb::server_instance_exec::run(argc, argv);
+    return kvdb::db_instance::run(argc, argv);
 }

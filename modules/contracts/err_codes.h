@@ -19,7 +19,7 @@ namespace kvdb::err_codes {
         Engine,
         QueryParser,
         ResponseConstructor,
-        Server
+        AccessInterface
     };
 
     [[nodiscard]] constexpr bool isDigit(char ch) noexcept {
@@ -88,7 +88,7 @@ namespace kvdb::err_codes {
         }
 
         if (startsWith(code, "050")) {
-            return Group::Server;
+            return Group::AccessInterface;
         }
 
         return Group::Unknown;
@@ -117,8 +117,8 @@ namespace kvdb::err_codes {
         return groupOf(code) == Group::ResponseConstructor;
     }
 
-    [[nodiscard]] constexpr bool isServerError(Code code) noexcept {
-        return groupOf(code) == Group::Server;
+    [[nodiscard]] constexpr bool isAccessInterfaceError(Code code) noexcept {
+        return groupOf(code) == Group::AccessInterface;
     }
 
     namespace shared {
@@ -158,7 +158,7 @@ namespace kvdb::err_codes {
         inline constexpr Code Generic = "040000";
     }
 
-    namespace server {
+    namespace accessInterface {
         inline constexpr Code Generic = "050000";
     }
 }
