@@ -9,6 +9,14 @@ namespace kvdb::modules::response_constructor::standard {
         std::string buildResponse(const std::string& engineResult) override {
             return "OK: " + engineResult;
         }
+
+        std::string buildSessionStartedResponse() override {
+            return "Session started";
+        }
+
+        std::string buildSessionEndedResponse() override {
+            return "Session ended";
+        }
     };
 }
 

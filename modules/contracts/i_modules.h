@@ -8,6 +8,8 @@ namespace kvdb::contracts {
     public:
         virtual ~IEngine() = default;
         virtual std::string execute(const std::string& parsedQuery) = 0;
+        virtual void onInstanceStart() = 0;
+        virtual void onInstanceShutdown() = 0;
     };
 
     class IQueryParser
@@ -22,6 +24,9 @@ namespace kvdb::contracts {
     public:
         virtual ~IResponseConstructor() = default;
         virtual std::string buildResponse(const std::string& engineResult) = 0;
+        
+        virtual std::string buildSessionStartedResponse() = 0;
+        virtual std::string buildSessionEndedResponse() = 0;
     };
 
     class IAccessInterface

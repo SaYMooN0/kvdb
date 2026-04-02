@@ -106,7 +106,8 @@ namespace kvdb::db_instance {
 
         [[nodiscard]] fs::path resolveDllPath(
             const fs::path& executableDir,
-            const std::string& dllFileName) {
+            const std::string& dllFileName
+        ) {
             fs::path result(dllFileName);
 
             if (result.is_absolute())

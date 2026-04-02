@@ -5,6 +5,12 @@ add_library(access_interface_standard SHARED
 target_link_libraries(access_interface_standard
         PRIVATE
         kvdb_contracts
+        ws2_32
+)
+
+target_include_directories(access_interface_standard
+        PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/boost
 )
 
 set_target_properties(access_interface_standard PROPERTIES

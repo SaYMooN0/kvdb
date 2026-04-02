@@ -9,6 +9,12 @@ namespace kvdb::modules::engine::standard {
         std::string execute(const std::string& parsedQuery) override {
             return "engine processed: " + parsedQuery;
         }
+
+        void onInstanceStart() override {
+        }
+
+        void onInstanceShutdown() override {
+        }
     };
 }
 
