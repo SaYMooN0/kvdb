@@ -1,10 +1,9 @@
 ﻿#include "table_name.h"
 
 #include <cstdint>
+#include <memory>
 #include <string_view>
 #include <vector>
-
-#include "kvdb_exception.h"
 
 namespace kvdb::contracts {
     namespace {
@@ -13,6 +12,7 @@ namespace kvdb::contracts {
             out.reserve(input.size());
 
             std::size_t i = 0;
+
             while (i < input.size()) {
                 const auto b0 = static_cast<unsigned char>(input[i]);
 
@@ -51,6 +51,7 @@ namespace kvdb::contracts {
 
                 for (int j = 1; j < length; ++j) {
                     const auto bx = static_cast<unsigned char>(input[i + j]);
+
                     if ((bx & 0b1100'0000) != 0b1000'0000) {
                         return false;
                     }
@@ -62,6 +63,11 @@ namespace kvdb::contracts {
                     return false;
                 }
 
+                // UTF-16 surrogate range is invalid in UTF-8.
+                if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+                    return false;
+                }
+
                 out.push_back(codePoint);
                 i += static_cast<std::size_t>(length);
             }
@@ -70,9 +76,9 @@ namespace kvdb::contracts {
         }
 
         bool isAllowedTableNameChar(char32_t ch) {
-            const bool isLatinUpper = (ch >= U'A' && ch <= U'Z');
-            const bool isLatinLower = (ch >= U'a' && ch <= U'z');
-            const bool isDigit = (ch >= U'0' && ch <= U'9');
+            const bool isLatinUpper = ch >= U'A' && ch <= U'Z';
+            const bool isLatinLower = ch >= U'a' && ch <= U'z';
+            const bool isDigit = ch >= U'0' && ch <= U'9';
             const bool isUnderscore = ch == U'_';
             const bool isHyphen = ch == U'-';
 
@@ -89,26 +95,32 @@ namespace kvdb::contracts {
         }
     }
 
-    TableName TableName::create(const std::string& value) {
+    TableName::Creation TableName::create(std::string value) {
         std::vector<char32_t> chars;
+
         if (!tryDecodeUtf8(value, chars)) {
-            throw KvdbException::invalidTableName("Table name is not valid UTF-8.");
+            return std::make_shared<InvalidTableNameErr>(
+                value,
+                "Table name is not valid UTF-8."
+            );
         }
 
         if (chars.size() < 2 || chars.size() > 127) {
-            throw KvdbException::invalidTableName(
+            return std::make_shared<InvalidTableNameErr>(
+                value,
                 "Table name length must be between 2 and 127 characters."
             );
         }
 
         for (const auto ch : chars) {
             if (!isAllowedTableNameChar(ch)) {
-                throw KvdbException::invalidTableName(
+                return std::make_shared<InvalidTableNameErr>(
+                    value,
                     "Table name contains unsupported characters."
                 );
             }
         }
 
-        return TableName(value);
+        return TableName(std::move(value));
     }
 }

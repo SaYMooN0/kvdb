@@ -1,5 +1,6 @@
 add_library(kvdb_contracts STATIC
         table_name.cpp
+        cmds/cmd_exec_results.h
 )
 
 target_include_directories(kvdb_contracts

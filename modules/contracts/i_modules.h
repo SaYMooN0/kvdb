@@ -2,13 +2,22 @@
 
 #include <string>
 
+#include "cmds/cmd_dtos.h"
+#include "cmds/cmd_parse_results.h"
+#include "cmds/cmd_exec_results.h"
+#include "err.h"
+
 namespace kvdb::contracts {
     class IEngine
     {
     public:
         virtual ~IEngine() = default;
-        virtual std::string execute(const std::string& parsedQuery) = 0;
+
+        [[nodiscard]]
+        virtual CmdExecResult execute(const BaseCmdDto& cmd) = 0;
+
         virtual void onInstanceStart() = 0;
+
         virtual void onInstanceShutdown() = 0;
     };
 
@@ -16,16 +25,30 @@ namespace kvdb::contracts {
     {
     public:
         virtual ~IQueryParser() = default;
-        virtual std::string parse(const std::string& rawQuery) = 0;
+
+        [[nodiscard]]
+        virtual CmdParseResult parse(const std::string& rawQuery) = 0;
     };
 
     class IResponseConstructor
     {
     public:
         virtual ~IResponseConstructor() = default;
-        virtual std::string buildResponse(const std::string& engineResult) = 0;
-        
+
+        [[nodiscard]]
+        virtual std::string buildSuccessResponse(
+            const SuccessCmdExecResult& success
+        ) = 0;
+
+        [[nodiscard]]
+        virtual std::string buildErrResponse(
+            const Err& err
+        ) = 0;
+
+        [[nodiscard]]
         virtual std::string buildSessionStartedResponse() = 0;
+
+        [[nodiscard]]
         virtual std::string buildSessionEndedResponse() = 0;
     };
 
@@ -37,6 +60,7 @@ namespace kvdb::contracts {
         virtual void start(
             IQueryParser& queryParser,
             IEngine& engine,
-            IResponseConstructor& responseConstructor) = 0;
+            IResponseConstructor& responseConstructor
+        ) = 0;
     };
 }
