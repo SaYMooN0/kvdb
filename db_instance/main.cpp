@@ -1,6 +1,9 @@
 ﻿#include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -8,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -28,6 +32,7 @@ namespace kvdb::db_instance {
     namespace {
         constexpr const char* kInstanceSettingsFileName = "instance_settings.txt";
         constexpr const char* kInstancePidFileName = "instance.pid";
+        constexpr const char* kInstanceStopRequestFileName = "instance.stop";
 
         struct InstanceSettings final
         {
@@ -308,6 +313,21 @@ namespace kvdb::db_instance {
             DestroyFn destroyFn_ = nullptr;
             TContract* instance_ = nullptr;
         };
+
+        [[nodiscard]]
+        fs::path getStopRequestPath(const fs::path& instanceDir) {
+            return instanceDir / kInstanceStopRequestFileName;
+        }
+
+        void removeStopRequestFile(const fs::path& instanceDir) {
+            std::error_code ec;
+            fs::remove(getStopRequestPath(instanceDir), ec);
+        }
+
+        [[nodiscard]]
+        bool hasStopRequest(const fs::path& instanceDir) {
+            return fs::exists(getStopRequestPath(instanceDir));
+        }
     }
 
     int run(int argc, char** argv) {
@@ -370,20 +390,47 @@ namespace kvdb::db_instance {
 
             std::cout << "Starting access interface...\n";
 
+            removeStopRequestFile(executableDir);
+
             engineModule.get().onInstanceStart();
 
-            try {
-                accessInterfaceModule.get().start(
-                    queryParserModule.get(),
-                    engineModule.get(),
-                    responseConstructorModule.get());
-            }
-            catch (...) {
-                engineModule.get().onInstanceShutdown();
-                throw;
+            std::atomic_bool accessInterfaceStopped = false;
+            std::exception_ptr accessInterfaceException = nullptr;
+
+            std::thread accessInterfaceThread([&] {
+                try {
+                    accessInterfaceModule.get().start(
+                        queryParserModule.get(),
+                        engineModule.get(),
+                        responseConstructorModule.get());
+                }
+                catch (...) {
+                    accessInterfaceException = std::current_exception();
+                }
+
+                accessInterfaceStopped = true;
+            });
+
+            while (!accessInterfaceStopped) {
+                if (hasStopRequest(executableDir)) {
+                    std::cout << "Stop request received.\n";
+
+                    removeStopRequestFile(executableDir);
+                    accessInterfaceModule.get().requestStop();
+
+                    break;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
 
+            if (accessInterfaceThread.joinable())
+                accessInterfaceThread.join();
+
             engineModule.get().onInstanceShutdown();
+
+            if (accessInterfaceException != nullptr)
+                std::rethrow_exception(accessInterfaceException);
 
             std::cout << "Access interface stopped.\n";
             return 0;

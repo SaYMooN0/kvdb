@@ -57,6 +57,7 @@ constexpr const char* kModuleExtension = ".so";
 constexpr const char* kInstanceSettingsFileName = "instance_settings.txt";
 constexpr const char* kInstancesRegistryFileName = "manager_instances.txt";
 constexpr const char* kInstancePidFileName = "instance.pid";
+constexpr const char* kInstanceStopRequestFileName = "instance.stop";
 
 std::vector<Instance> instances;
 
@@ -171,6 +172,25 @@ fs::path getInstanceDir(const Instance& instance) {
 fs::path getInstancePidPath(const Instance& instance) {
     return getInstanceDir(instance) / kInstancePidFileName;
 }
+
+fs::path getInstanceStopRequestPath(const Instance& instance) {
+    return getInstanceDir(instance) / kInstanceStopRequestFileName;
+}
+
+bool writeStopRequestFile(const Instance& instance) {
+    const fs::path stopPath = getInstanceStopRequestPath(instance);
+
+    std::ofstream output(stopPath);
+
+    if (!output.is_open()) {
+        std::cout << "Failed to create stop request file: " << stopPath << "\n";
+        return false;
+    }
+
+    output << "stop\n";
+    return true;
+}
+
 
 std::string buildModuleFileName(const std::string& moduleName, const std::string& implName) {
     return moduleName + "_" + implName + kModuleExtension;
@@ -528,6 +548,79 @@ InstanceRunState getInstanceRunState(const Instance& instance) {
     return {};
 }
 
+bool waitForInstanceStop(
+    const Instance& instance,
+    const std::chrono::milliseconds timeout
+) {
+    const auto startedAt = std::chrono::steady_clock::now();
+
+    while (std::chrono::steady_clock::now() - startedAt < timeout) {
+        const InstanceRunState state = getInstanceRunState(instance);
+
+        if (!state.isRunning)
+            return true;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+
+    return false;
+}
+
+void stopInstance(const std::string& name) {
+    const Instance* instance = findInstanceByName(name);
+
+    if (instance == nullptr) {
+        std::cout << "Instance not found\n";
+        return;
+    }
+
+    const InstanceRunState state = getInstanceRunState(*instance);
+
+    if (!state.isRunning) {
+        std::cout << "Instance is not running\n";
+        return;
+    }
+
+    if (!writeStopRequestFile(*instance))
+        return;
+
+    std::cout << "Stop requested";
+
+    if (state.pid.has_value())
+        std::cout << " for PID " << *state.pid;
+
+    std::cout << "\n";
+
+    if (waitForInstanceStop(*instance, std::chrono::seconds(5))) {
+        std::cout << "Instance stopped gracefully\n";
+        return;
+    }
+
+    std::cout << "Instance did not stop within timeout.\n";
+    std::cout << "Do not force-kill it if you need engine.onInstanceShutdown() to run.\n";
+}
+
+Command constructStopCommand() {
+    return [](std::stringstream& ss) {
+        std::string name;
+
+        if (!(ss >> name)) {
+            std::cout << "Usage: stop <name>\n";
+            return;
+        }
+
+        std::string extraArg;
+
+        if (ss >> extraArg) {
+            std::cout << "Unknown stop argument: " << extraArg << "\n";
+            return;
+        }
+
+        name = removeQuotes(name);
+        stopInstance(name);
+    };
+}
+
 bool startProcessForeground(
     const fs::path& executablePath,
     const fs::path& workingDirectory
@@ -707,8 +800,8 @@ void showInstances() {
 
         const std::string status = state.isRunning ? "running" : "stopped";
         const std::string pid = state.pid.has_value()
-            ? std::to_string(*state.pid)
-            : "-";
+                                    ? std::to_string(*state.pid)
+                                    : "-";
 
         std::cout
             << std::left
@@ -828,6 +921,8 @@ void helpCommand() {
     std::cout << "      Run registered instance in background.\n";
     std::cout << "  run <name> -b\n";
     std::cout << "      Same as run -b <name>.\n";
+    std::cout << "  stop <name>\n";
+    std::cout << "      Gracefully stop running instance.\n";
     std::cout << "  modules\n";
     std::cout << "      Show available module implementations.\n";
     std::cout << "  help\n";
@@ -998,6 +1093,7 @@ std::unordered_map<std::string, Command> registerCommands() {
     commands["run"] = constructRunCommand();
     commands["modules"] = constructModulesCommand();
     commands["help"] = constructHelpCommand();
+    commands["stop"] = constructStopCommand();
 
     return commands;
 }

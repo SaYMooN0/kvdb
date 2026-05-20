@@ -62,5 +62,6 @@ namespace kvdb::contracts {
             IEngine& engine,
             IResponseConstructor& responseConstructor
         ) = 0;
+        virtual void requestStop() = 0;
     };
 }

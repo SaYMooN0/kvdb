@@ -9,6 +9,8 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <atomic>
+#include <mutex>
 
 #include "i_modules.h"
 
@@ -135,72 +137,148 @@ namespace kvdb::modules::access_interface::standard {
             kvdb::contracts::IEngine& engine,
             kvdb::contracts::IResponseConstructor& responseConstructor
         ) override {
+            stopRequested_.store(false);
+
             constexpr unsigned short port = 9002;
             const auto address = net::ip::make_address("0.0.0.0");
 
             net::io_context ioContext{1};
             tcp::acceptor acceptor{ioContext};
 
-            beast::error_code ec;
+            setActiveAcceptor(&acceptor);
 
-            acceptor.open(address.is_v6() ? tcp::v6() : tcp::v4(), ec);
+            try {
+                beast::error_code ec;
 
-            if (ec) {
-                throw beast::system_error(ec);
-            }
-
-            acceptor.set_option(net::socket_base::reuse_address(true), ec);
-
-            if (ec) {
-                throw beast::system_error(ec);
-            }
-
-            acceptor.bind(tcp::endpoint{address, port}, ec);
-
-            if (ec) {
-                throw beast::system_error(ec);
-            }
-
-            acceptor.listen(net::socket_base::max_listen_connections, ec);
-
-            if (ec) {
-                throw beast::system_error(ec);
-            }
-
-            std::cout << "WebSocket access interface started on 0.0.0.0:"
-                << port
-                << '\n';
-
-            while (true) {
-                tcp::socket socket{ioContext};
-
-                acceptor.accept(socket, ec);
+                acceptor.open(address.is_v6() ? tcp::v6() : tcp::v4(), ec);
 
                 if (ec) {
-                    std::cerr << "Accept failed: "
-                        << ec.message()
-                        << '\n';
-                    continue;
+                    throw beast::system_error(ec);
                 }
 
-                try {
-                    handleSingleConnection(
-                        std::move(socket),
-                        queryParser,
-                        engine,
-                        responseConstructor
-                    );
+                acceptor.set_option(net::socket_base::reuse_address(true), ec);
+
+                if (ec) {
+                    throw beast::system_error(ec);
                 }
-                catch (const std::exception& ex) {
-                    std::cerr << "Connection handling failed: "
-                        << ex.what()
-                        << '\n';
+
+                acceptor.bind(tcp::endpoint{address, port}, ec);
+
+                if (ec) {
+                    throw beast::system_error(ec);
                 }
+
+                acceptor.listen(net::socket_base::max_listen_connections, ec);
+
+                if (ec) {
+                    throw beast::system_error(ec);
+                }
+
+                std::cout << "WebSocket access interface started on 0.0.0.0:"
+                    << port
+                    << '\n';
+
+                while (!stopRequested_.load()) {
+                    tcp::socket socket{ioContext};
+
+                    acceptor.accept(socket, ec);
+
+                    if (stopRequested_.load()) {
+                        break;
+                    }
+
+                    if (ec == net::error::operation_aborted) {
+                        break;
+                    }
+
+                    if (ec) {
+                        std::cerr << "Accept failed: "
+                            << ec.message()
+                            << '\n';
+                        continue;
+                    }
+
+                    try {
+                        handleSingleConnection(
+                            std::move(socket),
+                            queryParser,
+                            engine,
+                            responseConstructor
+                        );
+                    }
+                    catch (const std::exception& ex) {
+                        if (stopRequested_.load()) {
+                            break;
+                        }
+
+                        std::cerr << "Connection handling failed: "
+                            << ex.what()
+                            << '\n';
+                    }
+                }
+
+                std::cout << "WebSocket access interface stopped.\n";
+                clearActiveAcceptor(&acceptor);
+            }
+            catch (...) {
+                clearActiveAcceptor(&acceptor);
+                throw;
+            }
+        }
+
+        void requestStop() override {
+            stopRequested_.store(true);
+
+            std::lock_guard lock(stateMutex_);
+
+            if (activeAcceptor_ != nullptr) {
+                beast::error_code ec;
+                activeAcceptor_->cancel(ec);
+                activeAcceptor_->close(ec);
+            }
+
+            if (activeWebSocket_ != nullptr) {
+                beast::error_code ec;
+
+                activeWebSocket_->next_layer().cancel(ec);
+                activeWebSocket_->next_layer().close(ec);
             }
         }
 
     private:
-        static void handleSingleConnection(
+        std::atomic_bool stopRequested_{false};
+        std::mutex stateMutex_;
+
+        tcp::acceptor* activeAcceptor_ = nullptr;
+        websocket::stream<tcp::socket>* activeWebSocket_ = nullptr;
+
+        void setActiveAcceptor(tcp::acceptor* acceptor) {
+            std::lock_guard lock(stateMutex_);
+            activeAcceptor_ = acceptor;
+        }
+
+        void clearActiveAcceptor(tcp::acceptor* acceptor) {
+            std::lock_guard lock(stateMutex_);
+
+            if (activeAcceptor_ == acceptor) {
+                activeAcceptor_ = nullptr;
+            }
+        }
+
+        void setActiveWebSocket(websocket::stream<tcp::socket>* ws) {
+            std::lock_guard lock(stateMutex_);
+            activeWebSocket_ = ws;
+        }
+
+        void clearActiveWebSocket(websocket::stream<tcp::socket>* ws) {
+            std::lock_guard lock(stateMutex_);
+
+            if (activeWebSocket_ == ws) {
+                activeWebSocket_ = nullptr;
+            }
+        }
+
+        void handleSingleConnection(
             tcp::socket socket,
             kvdb::contracts::IQueryParser& queryParser,
             kvdb::contracts::IEngine& engine,
@@ -209,66 +287,89 @@ namespace kvdb::modules::access_interface::standard {
             beast::error_code ec;
             websocket::stream<tcp::socket> ws{std::move(socket)};
 
-            ws.set_option(
-                websocket::stream_base::timeout::suggested(
-                    beast::role_type::server
-                )
-            );
+            setActiveWebSocket(&ws);
 
-            ws.accept(ec);
+            try {
+                ws.set_option(
+                    websocket::stream_base::timeout::suggested(
+                        beast::role_type::server
+                    )
+                );
 
-            if (ec) {
-                throw beast::system_error(ec);
-            }
+                ws.accept(ec);
 
-            ws.text(true);
-
-            writeText(
-                ws,
-                responseConstructor.buildSessionStartedResponse()
-            );
-
-            beast::flat_buffer buffer;
-
-            while (true) {
-                buffer.consume(buffer.size());
-
-                ws.read(buffer, ec);
-
-                if (ec == websocket::error::closed) {
-                    break;
+                if (stopRequested_.load()) {
+                    clearActiveWebSocket(&ws);
+                    return;
                 }
 
                 if (ec) {
                     throw beast::system_error(ec);
                 }
 
-                const std::string rawQuery =
-                    beast::buffers_to_string(buffer.data());
+                ws.text(true);
 
-                if (isExitCommand(rawQuery)) {
-                    writeText(
-                        ws,
-                        responseConstructor.buildSessionEndedResponse()
-                    );
+                writeText(
+                    ws,
+                    responseConstructor.buildSessionStartedResponse()
+                );
 
-                    ws.close(websocket::close_code::normal, ec);
+                beast::flat_buffer buffer;
 
-                    if (ec && ec != websocket::error::closed) {
+                while (!stopRequested_.load()) {
+                    buffer.consume(buffer.size());
+
+                    ws.read(buffer, ec);
+
+                    if (stopRequested_.load()) {
+                        break;
+                    }
+
+                    if (ec == websocket::error::closed) {
+                        break;
+                    }
+
+                    if (ec == net::error::operation_aborted) {
+                        break;
+                    }
+
+                    if (ec) {
                         throw beast::system_error(ec);
                     }
 
-                    break;
+                    const std::string rawQuery =
+                        beast::buffers_to_string(buffer.data());
+
+                    if (isExitCommand(rawQuery)) {
+                        writeText(
+                            ws,
+                            responseConstructor.buildSessionEndedResponse()
+                        );
+
+                        ws.close(websocket::close_code::normal, ec);
+
+                        if (ec && ec != websocket::error::closed) {
+                            throw beast::system_error(ec);
+                        }
+
+                        break;
+                    }
+
+                    const std::string response = buildResponseForRawQuery(
+                        rawQuery,
+                        queryParser,
+                        engine,
+                        responseConstructor
+                    );
+
+                    writeText(ws, response);
                 }
 
-                const std::string response = buildResponseForRawQuery(
-                    rawQuery,
-                    queryParser,
-                    engine,
-                    responseConstructor
-                );
-
-                writeText(ws, response);
+                clearActiveWebSocket(&ws);
+            }
+            catch (...) {
+                clearActiveWebSocket(&ws);
+                throw;
             }
         }
     };
