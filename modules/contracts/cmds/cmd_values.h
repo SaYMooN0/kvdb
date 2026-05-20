@@ -20,8 +20,12 @@ namespace kvdb::contracts {
     {
         bool isSigned = false;
         std::array<std::uint8_t, 16> bytes{};
-        // for int(4), int(8), int(16)
         std::uint8_t byteLength = 0;
+    };
+
+    struct FloatCmdValue final
+    {
+        double value = 0.0;
     };
 
     struct BoolCmdValue final
@@ -34,6 +38,7 @@ namespace kvdb::contracts {
         Uuid,
         CharSeq,
         Number,
+        Float,
         Bool
     };
 
@@ -46,6 +51,7 @@ namespace kvdb::contracts {
             UuidCmdValue uuid;
             CharSeqCmdValue charSeq;
             NumberCmdValue number;
+            FloatCmdValue floating;
             BoolCmdValue boolean;
         };
 
@@ -94,8 +100,6 @@ namespace kvdb::contracts {
             PrimitiveCmdValueArrayView array;
             NullablePrimitiveCmdValueArrayView arrayOfNullable;
 
-            // nullable array:
-            // hasValue=false means null
             struct
             {
                 bool hasValue;
@@ -117,7 +121,9 @@ namespace kvdb::contracts {
         Uuid,
         CharSeq,
         Int,
+        UInt,
         Bool,
+        Float,
         Nullable,
         Array
     };
@@ -126,10 +132,10 @@ namespace kvdb::contracts {
     {
         CmdTypeKind type;
 
-        // для int(4), charseq(4)
+        // for int(n), uint(n), charseq(n)
         std::uint16_t sizeParam = 0;
 
-        // для nullable(...), array(...)
+        // for nullable(...), array(...)
         const CmdTypeKindValue* typeParam = nullptr;
     };
 }

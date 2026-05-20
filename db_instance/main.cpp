@@ -1,14 +1,21 @@
 ﻿#include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
 #endif
 
 #include "dll_loader.h"
@@ -19,6 +26,9 @@ namespace fs = std::filesystem;
 
 namespace kvdb::db_instance {
     namespace {
+        constexpr const char* kInstanceSettingsFileName = "instance_settings.txt";
+        constexpr const char* kInstancePidFileName = "instance.pid";
+
         struct InstanceSettings final
         {
             std::string engineDllFileName;
@@ -27,7 +37,8 @@ namespace kvdb::db_instance {
             std::string responseConstructorDllFileName;
         };
 
-        [[nodiscard]] std::string trim(const std::string& value) {
+        [[nodiscard]]
+        std::string trim(const std::string& value) {
             const auto isNotSpace = [](unsigned char ch) {
                 return !std::isspace(ch);
             };
@@ -42,7 +53,8 @@ namespace kvdb::db_instance {
             return std::string(beginIt, endIt);
         }
 
-        [[nodiscard]] fs::path getExecutableDirectory() {
+        [[nodiscard]]
+        fs::path getExecutableDirectory() {
 #ifdef _WIN32
             std::wstring buffer(32768, L'\0');
 
@@ -60,11 +72,142 @@ namespace kvdb::db_instance {
 
             return fs::path(buffer).parent_path();
 #else
-            return fs::current_path();
+            char buffer[4096];
+
+            const ssize_t length = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+
+            if (length <= 0)
+                return fs::current_path();
+
+            buffer[length] = '\0';
+
+            return fs::path(buffer).parent_path();
 #endif
         }
 
-        [[nodiscard]] InstanceSettings readInstanceSettings(const fs::path& settingsPath) {
+        [[nodiscard]]
+        std::uint64_t getCurrentProcessIdPortable() {
+#ifdef _WIN32
+            return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+            return static_cast<std::uint64_t>(getpid());
+#endif
+        }
+
+        [[nodiscard]]
+        bool isProcessRunning(const std::uint64_t pid) {
+#ifdef _WIN32
+            if (pid == 0 || pid > std::numeric_limits<DWORD>::max())
+                return false;
+
+            HANDLE process = OpenProcess(
+                SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                FALSE,
+                static_cast<DWORD>(pid)
+            );
+
+            if (process == nullptr)
+                return false;
+
+            const DWORD waitResult = WaitForSingleObject(process, 0);
+            CloseHandle(process);
+
+            return waitResult == WAIT_TIMEOUT;
+#else
+            if (pid == 0 || pid > static_cast<std::uint64_t>(std::numeric_limits<pid_t>::max()))
+                return false;
+
+            const auto nativePid = static_cast<pid_t>(pid);
+
+            if (kill(nativePid, 0) == 0)
+                return true;
+
+            return errno == EPERM;
+#endif
+        }
+
+        [[nodiscard]]
+        std::optional<std::uint64_t> readPidFromFile(const fs::path& pidPath) {
+            if (!fs::exists(pidPath))
+                return std::nullopt;
+
+            std::ifstream input(pidPath);
+
+            if (!input.is_open())
+                return std::nullopt;
+
+            std::uint64_t pid = 0;
+
+            if (!(input >> pid))
+                return std::nullopt;
+
+            if (pid == 0)
+                return std::nullopt;
+
+            return pid;
+        }
+
+        bool writePidToFile(const fs::path& pidPath, const std::uint64_t pid) {
+            std::ofstream output(pidPath);
+
+            if (!output.is_open())
+                return false;
+
+            output << pid << '\n';
+            return true;
+        }
+
+        class InstanceRuntimeRegistration final
+        {
+        public:
+            explicit InstanceRuntimeRegistration(fs::path instanceDir)
+                : instanceDir_(std::move(instanceDir)),
+                  pidPath_(instanceDir_ / kInstancePidFileName) {
+                const std::optional<std::uint64_t> existingPid = readPidFromFile(pidPath_);
+
+                if (existingPid.has_value()) {
+                    if (isProcessRunning(*existingPid)) {
+                        throw std::runtime_error(
+                            "This instance is already running. PID: " +
+                            std::to_string(*existingPid));
+                    }
+
+                    std::error_code ec;
+                    fs::remove(pidPath_, ec);
+                }
+
+                const std::uint64_t currentPid = getCurrentProcessIdPortable();
+
+                if (!writePidToFile(pidPath_, currentPid)) {
+                    throw std::runtime_error(
+                        "Failed to write instance pid file: " + pidPath_.string());
+                }
+
+                registered_ = true;
+            }
+
+            ~InstanceRuntimeRegistration() {
+                if (!registered_)
+                    return;
+
+                std::error_code ec;
+                fs::remove(pidPath_, ec);
+            }
+
+            InstanceRuntimeRegistration(const InstanceRuntimeRegistration&) = delete;
+            InstanceRuntimeRegistration& operator=(const InstanceRuntimeRegistration&) = delete;
+
+            InstanceRuntimeRegistration(InstanceRuntimeRegistration&&) = delete;
+            InstanceRuntimeRegistration& operator=(InstanceRuntimeRegistration&&) = delete;
+
+        private:
+            fs::path instanceDir_;
+            fs::path pidPath_;
+            bool registered_ = false;
+        };
+
+        [[nodiscard]]
+        InstanceSettings readInstanceSettings(const fs::path& settingsPath) {
             std::ifstream input(settingsPath);
 
             if (!input.is_open()) {
@@ -104,7 +247,8 @@ namespace kvdb::db_instance {
             };
         }
 
-        [[nodiscard]] fs::path resolveDllPath(
+        [[nodiscard]]
+        fs::path resolveDllPath(
             const fs::path& executableDir,
             const std::string& dllFileName
         ) {
@@ -153,7 +297,8 @@ namespace kvdb::db_instance {
             LoadedModule(LoadedModule&&) = delete;
             LoadedModule& operator=(LoadedModule&&) = delete;
 
-            [[nodiscard]] TContract& get() const {
+            [[nodiscard]]
+            TContract& get() const {
                 return *instance_;
             }
 
@@ -169,6 +314,8 @@ namespace kvdb::db_instance {
         try {
             const fs::path executableDir = getExecutableDirectory();
 
+            InstanceRuntimeRegistration runtimeRegistration(executableDir);
+
             fs::path settingsPath;
 
             if (argc >= 2) {
@@ -178,7 +325,7 @@ namespace kvdb::db_instance {
                     settingsPath = fs::absolute(settingsPath);
             }
             else {
-                settingsPath = executableDir / "instance_settings.txt";
+                settingsPath = executableDir / kInstanceSettingsFileName;
             }
 
             const InstanceSettings settings = readInstanceSettings(settingsPath);
@@ -223,10 +370,20 @@ namespace kvdb::db_instance {
 
             std::cout << "Starting access interface...\n";
 
-            accessInterfaceModule.get().start(
-                queryParserModule.get(),
-                engineModule.get(),
-                responseConstructorModule.get());
+            engineModule.get().onInstanceStart();
+
+            try {
+                accessInterfaceModule.get().start(
+                    queryParserModule.get(),
+                    engineModule.get(),
+                    responseConstructorModule.get());
+            }
+            catch (...) {
+                engineModule.get().onInstanceShutdown();
+                throw;
+            }
+
+            engineModule.get().onInstanceShutdown();
 
             std::cout << "Access interface stopped.\n";
             return 0;

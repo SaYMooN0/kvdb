@@ -1,14 +1,27 @@
 ﻿#include <filesystem>
 #include <fstream>
+#include <cctype>
+#include <chrono>
+#include <cstdint>
 #include <functional>
+#include <iomanip>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -21,9 +34,16 @@ namespace fs = std::filesystem;
 #define KVDB_DIST_DIR "./dist"
 #endif
 
-struct Instance {
+struct Instance
+{
     std::string name;
     std::string path;
+};
+
+struct InstanceRunState
+{
+    bool isRunning = false;
+    std::optional<std::uint64_t> pid;
 };
 
 #ifdef _WIN32
@@ -35,6 +55,8 @@ constexpr const char* kModuleExtension = ".so";
 #endif
 
 constexpr const char* kInstanceSettingsFileName = "instance_settings.txt";
+constexpr const char* kInstancesRegistryFileName = "manager_instances.txt";
+constexpr const char* kInstancePidFileName = "instance.pid";
 
 std::vector<Instance> instances;
 
@@ -47,58 +69,87 @@ std::string removeQuotes(const std::string& s) {
     return s;
 }
 
+std::string trim(const std::string& s) {
+    std::size_t first = 0;
+
+    while (first < s.size() && std::isspace(static_cast<unsigned char>(s[first])))
+        ++first;
+
+    std::size_t last = s.size();
+
+    while (last > first && std::isspace(static_cast<unsigned char>(s[last - 1])))
+        --last;
+
+    return s.substr(first, last - first);
+}
+
+bool containsWhitespace(const std::string& s) {
+    for (const char ch : s) {
+        if (std::isspace(static_cast<unsigned char>(ch)))
+            return true;
+    }
+
+    return false;
+}
+
+bool isInitCancelInput(const std::string& input) {
+    const std::string value = trim(input);
+
+    return value == "cancel"
+        || value == ":cancel"
+        || value == "abort"
+        || value == ":abort";
+}
+
+std::optional<std::string> promptRequiredInitValue(const std::string& prompt) {
+    while (true) {
+        std::cout << prompt << " (cancel = abort init): " << std::flush;
+
+        std::string line;
+
+        if (!std::getline(std::cin, line))
+            return std::nullopt;
+
+        if (isInitCancelInput(line))
+            return std::nullopt;
+
+        std::string value = removeQuotes(trim(line));
+
+        if (!value.empty())
+            return value;
+
+        std::cout << "Value is required. Type cancel to abort init.\n";
+    }
+}
+
+std::optional<std::string> promptOptionalModuleImpl(
+    const std::string& moduleName,
+    const std::string& defaultImpl
+) {
+    std::cout << moduleName << " implementation [" << defaultImpl
+        << "] (empty = default, cancel = abort init): " << std::flush;
+
+    std::string line;
+
+    if (!std::getline(std::cin, line))
+        return std::nullopt;
+
+    if (isInitCancelInput(line))
+        return std::nullopt;
+
+    std::string value = removeQuotes(trim(line));
+
+    if (value.empty())
+        return defaultImpl;
+
+    return value;
+}
+
 std::string quote(const std::string& s) {
     if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
         return s;
 
     return "\"" + s + "\"";
-}
-
-bool runProcess(const std::string& command, const std::string& workingDirectory = "") {
-#ifdef _WIN32
-    STARTUPINFOA si{};
-    PROCESS_INFORMATION pi{};
-
-    si.cb = sizeof(si);
-
-    std::string cmdLine = command;
-    std::vector<char> mutableCmdLine(cmdLine.begin(), cmdLine.end());
-    mutableCmdLine.push_back('\0');
-
-    const char* workDirPtr = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
-
-    if (!CreateProcessA(
-        nullptr,
-        mutableCmdLine.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        0,
-        nullptr,
-        workDirPtr,
-        &si,
-        &pi)) {
-        std::cout << "Failed to start process\n";
-        return false;
-    }
-
-    WaitForSingleObject(pi.hProcess, INFINITE);
-
-    DWORD exitCode = 0;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    return exitCode == 0;
-#else
-    std::string finalCommand = command;
-
-    if (!workingDirectory.empty())
-        finalCommand = "cd " + quote(workingDirectory) + " && " + command;
-
-    return system(finalCommand.c_str()) == 0;
-#endif
 }
 
 fs::path getSourceRoot() {
@@ -107,6 +158,18 @@ fs::path getSourceRoot() {
 
 fs::path getDistRoot() {
     return fs::path(KVDB_DIST_DIR);
+}
+
+fs::path getInstancesRegistryPath() {
+    return getDistRoot() / kInstancesRegistryFileName;
+}
+
+fs::path getInstanceDir(const Instance& instance) {
+    return fs::path(instance.path) / instance.name;
+}
+
+fs::path getInstancePidPath(const Instance& instance) {
+    return getInstanceDir(instance) / kInstancePidFileName;
 }
 
 std::string buildModuleFileName(const std::string& moduleName, const std::string& implName) {
@@ -119,6 +182,15 @@ fs::path getBuiltModulePath(const std::string& moduleName, const std::string& im
 
 fs::path getBuiltDbInstancePath() {
     return getDistRoot() / kDbInstanceFileName;
+}
+
+const Instance* findInstanceByName(const std::string& name) {
+    for (const auto& instance : instances) {
+        if (instance.name == name)
+            return &instance;
+    }
+
+    return nullptr;
 }
 
 bool ensureFileExists(const fs::path& path, const std::string& description) {
@@ -136,8 +208,75 @@ bool copyFileChecked(const fs::path& source, const fs::path& destination) {
     }
     catch (const std::exception& ex) {
         std::cout << "Failed to copy file from " << source << " to " << destination
-                  << ". " << ex.what() << "\n";
+            << ". " << ex.what() << "\n";
         return false;
+    }
+}
+
+bool hasRegisteredInstanceName(const std::string& name) {
+    return findInstanceByName(name) != nullptr;
+}
+
+bool saveInstancesRegistry() {
+    const fs::path registryPath = getInstancesRegistryPath();
+
+    try {
+        const fs::path parentPath = registryPath.parent_path();
+
+        if (!parentPath.empty())
+            fs::create_directories(parentPath);
+    }
+    catch (const std::exception& ex) {
+        std::cout << "Failed to create instances registry directory: " << ex.what() << "\n";
+        return false;
+    }
+
+    std::ofstream output(registryPath);
+
+    if (!output.is_open()) {
+        std::cout << "Failed to create instances registry: " << registryPath << "\n";
+        return false;
+    }
+
+    for (const auto& instance : instances)
+        output << instance.name << '\t' << instance.path << '\n';
+
+    return true;
+}
+
+void loadInstancesRegistry() {
+    const fs::path registryPath = getInstancesRegistryPath();
+
+    if (!fs::exists(registryPath))
+        return;
+
+    std::ifstream input(registryPath);
+
+    if (!input.is_open()) {
+        std::cout << "Failed to open instances registry: " << registryPath << "\n";
+        return;
+    }
+
+    std::string line;
+
+    while (std::getline(input, line)) {
+        if (line.empty())
+            continue;
+
+        std::stringstream lineStream(line);
+        std::string name;
+        std::string path;
+
+        std::getline(lineStream, name, '\t');
+        std::getline(lineStream, path);
+
+        if (name.empty() || path.empty())
+            continue;
+
+        if (hasRegisteredInstanceName(name))
+            continue;
+
+        instances.push_back({name, path});
     }
 }
 
@@ -164,6 +303,59 @@ bool writeInstanceSettings(
     return true;
 }
 
+#ifdef _WIN32
+bool copyFirstExistingRuntimeDll(
+    const fs::path& instanceDir,
+    const std::vector<std::string>& possibleFileNames,
+    const std::string& description
+) {
+    for (const auto& fileName : possibleFileNames) {
+        const fs::path source = getDistRoot() / fileName;
+
+        if (!fs::exists(source))
+            continue;
+
+        const fs::path destination = instanceDir / fileName;
+        return copyFileChecked(source, destination);
+    }
+
+    std::cout << description << " not found in dist. Tried:\n";
+
+    for (const auto& fileName : possibleFileNames)
+        std::cout << "  " << (getDistRoot() / fileName) << "\n";
+
+    return false;
+}
+
+bool copyRuntimeDllsToInstance(const fs::path& instanceDir) {
+    bool copiedAll = true;
+
+    copiedAll = copyFirstExistingRuntimeDll(
+        instanceDir,
+        {"libstdc++-6.dll"},
+        "C++ runtime DLL"
+    ) && copiedAll;
+
+    copiedAll = copyFirstExistingRuntimeDll(
+        instanceDir,
+        {"libwinpthread-1.dll"},
+        "WinPthread runtime DLL"
+    ) && copiedAll;
+
+    copiedAll = copyFirstExistingRuntimeDll(
+        instanceDir,
+        {
+            "libgcc_s_seh-1.dll",
+            "libgcc_s_dw2-1.dll",
+            "libgcc_s_sjlj-1.dll"
+        },
+        "GCC runtime DLL"
+    ) && copiedAll;
+
+    return copiedAll;
+}
+#endif
+
 bool createInstance(
     const std::string& path,
     const std::string& name,
@@ -173,6 +365,11 @@ bool createInstance(
     const std::string& accessInterfaceImpl
 ) {
     const fs::path instanceDir = fs::path(path) / name;
+
+    if (hasRegisteredInstanceName(name)) {
+        std::cout << "Instance with this name is already registered: " << name << "\n";
+        return false;
+    }
 
     if (fs::exists(instanceDir)) {
         std::cout << "Instance already exists: " << instanceDir << "\n";
@@ -201,6 +398,14 @@ bool createInstance(
     if (!ensureFileExists(builtResponseDllPath, "response_constructor module"))
         return false;
 
+#ifdef _WIN32
+    if (!ensureFileExists(getDistRoot() / "libstdc++-6.dll", "C++ runtime DLL"))
+        return false;
+
+    if (!ensureFileExists(getDistRoot() / "libwinpthread-1.dll", "WinPthread runtime DLL"))
+        return false;
+#endif
+
     try {
         fs::create_directories(instanceDir);
     }
@@ -218,6 +423,11 @@ bool createInstance(
 
     if (!copyFileChecked(builtExecPath, instanceExecPath))
         return false;
+
+#ifdef _WIN32
+    if (!copyRuntimeDllsToInstance(instanceDir))
+        return false;
+#endif
 
     if (!copyFileChecked(builtEngineDllPath, instanceDir / engineDllFileName))
         return false;
@@ -240,40 +450,339 @@ bool createInstance(
         return false;
 
     instances.push_back({name, path});
+
+    if (!saveInstancesRegistry())
+        std::cout << "Warning: instance was created, but registry was not saved\n";
+
     return true;
+}
+
+std::optional<std::uint64_t> readInstancePid(const Instance& instance) {
+    const fs::path pidPath = getInstancePidPath(instance);
+
+    if (!fs::exists(pidPath))
+        return std::nullopt;
+
+    std::ifstream input(pidPath);
+
+    if (!input.is_open())
+        return std::nullopt;
+
+    std::uint64_t pid = 0;
+
+    if (!(input >> pid))
+        return std::nullopt;
+
+    if (pid == 0)
+        return std::nullopt;
+
+    return pid;
+}
+
+void removeInstancePidFile(const Instance& instance) {
+    std::error_code ec;
+    fs::remove(getInstancePidPath(instance), ec);
+}
+
+bool isProcessRunning(const std::uint64_t pid) {
+#ifdef _WIN32
+    if (pid == 0 || pid > std::numeric_limits<DWORD>::max())
+        return false;
+
+    HANDLE process = OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+        FALSE,
+        static_cast<DWORD>(pid)
+    );
+
+    if (process == nullptr)
+        return false;
+
+    const DWORD waitResult = WaitForSingleObject(process, 0);
+    CloseHandle(process);
+
+    return waitResult == WAIT_TIMEOUT;
+#else
+    if (pid == 0 || pid > static_cast<std::uint64_t>(std::numeric_limits<pid_t>::max()))
+        return false;
+
+    const auto nativePid = static_cast<pid_t>(pid);
+
+    if (kill(nativePid, 0) == 0)
+        return true;
+
+    return errno == EPERM;
+#endif
+}
+
+InstanceRunState getInstanceRunState(const Instance& instance) {
+    const std::optional<std::uint64_t> pid = readInstancePid(instance);
+
+    if (!pid.has_value())
+        return {};
+
+    if (isProcessRunning(*pid))
+        return {true, pid};
+
+    removeInstancePidFile(instance);
+    return {};
+}
+
+bool startProcessForeground(
+    const fs::path& executablePath,
+    const fs::path& workingDirectory
+) {
+#ifdef _WIN32
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+
+    si.cb = sizeof(si);
+
+    std::string cmdLine = quote(executablePath.string());
+    std::vector<char> mutableCmdLine(cmdLine.begin(), cmdLine.end());
+    mutableCmdLine.push_back('\0');
+
+    const std::string workDir = workingDirectory.string();
+    const char* workDirPtr = workDir.empty() ? nullptr : workDir.c_str();
+
+    if (!CreateProcessA(
+        nullptr,
+        mutableCmdLine.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        0,
+        nullptr,
+        workDirPtr,
+        &si,
+        &pi)) {
+        std::cout << "Failed to start process. Windows error: " << GetLastError() << "\n";
+        return false;
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (exitCode != 0) {
+        std::cout << "Process exited with code: "
+            << static_cast<std::int32_t>(exitCode) << "\n";
+        return false;
+    }
+
+    return true;
+#else
+    const pid_t childPid = fork();
+
+    if (childPid < 0) {
+        std::cout << "Failed to fork process\n";
+        return false;
+    }
+
+    if (childPid == 0) {
+        if (!workingDirectory.empty())
+            chdir(workingDirectory.string().c_str());
+
+        execl(executablePath.string().c_str(), executablePath.filename().string().c_str(), nullptr);
+        _exit(127);
+    }
+
+    int status = 0;
+
+    if (waitpid(childPid, &status, 0) < 0) {
+        std::cout << "Failed to wait for process\n";
+        return false;
+    }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        std::cout << "Process exited with error\n";
+        return false;
+    }
+
+    return true;
+#endif
+}
+
+bool startProcessBackground(
+    const fs::path& executablePath,
+    const fs::path& workingDirectory,
+    std::uint64_t& pid
+) {
+#ifdef _WIN32
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+
+    si.cb = sizeof(si);
+
+    std::string cmdLine = quote(executablePath.string());
+    std::vector<char> mutableCmdLine(cmdLine.begin(), cmdLine.end());
+    mutableCmdLine.push_back('\0');
+
+    const std::string workDir = workingDirectory.string();
+    const char* workDirPtr = workDir.empty() ? nullptr : workDir.c_str();
+
+    if (!CreateProcessA(
+        nullptr,
+        mutableCmdLine.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_NEW_CONSOLE,
+        nullptr,
+        workDirPtr,
+        &si,
+        &pi)) {
+        std::cout << "Failed to start process in background. Windows error: "
+            << GetLastError() << "\n";
+        return false;
+    }
+
+    pid = static_cast<std::uint64_t>(pi.dwProcessId);
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    return true;
+#else
+    const pid_t childPid = fork();
+
+    if (childPid < 0) {
+        std::cout << "Failed to fork background process\n";
+        return false;
+    }
+
+    if (childPid == 0) {
+        if (!workingDirectory.empty())
+            chdir(workingDirectory.string().c_str());
+
+        execl(executablePath.string().c_str(), executablePath.filename().string().c_str(), nullptr);
+        _exit(127);
+    }
+
+    pid = static_cast<std::uint64_t>(childPid);
+    return true;
+#endif
+}
+
+bool waitForInstanceRegistration(
+    const Instance& instance,
+    const std::chrono::milliseconds timeout
+) {
+    const auto startedAt = std::chrono::steady_clock::now();
+
+    while (std::chrono::steady_clock::now() - startedAt < timeout) {
+        const InstanceRunState state = getInstanceRunState(instance);
+
+        if (state.isRunning)
+            return true;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    return false;
 }
 
 void showInstances() {
     if (instances.empty()) {
-        std::cout << "No instances created in this manager session\n";
+        std::cout << "No instances registered\n";
         return;
     }
 
-    for (const auto& i : instances)
-        std::cout << i.name << " - " << i.path << '\n';
+    std::cout
+        << std::left
+        << std::setw(18) << "NAME"
+        << std::setw(12) << "STATUS"
+        << std::setw(10) << "PID"
+        << "DIRECTORY"
+        << "\n";
+
+    std::cout << std::string(70, '-') << "\n";
+
+    for (const auto& instance : instances) {
+        const InstanceRunState state = getInstanceRunState(instance);
+
+        const std::string status = state.isRunning ? "running" : "stopped";
+        const std::string pid = state.pid.has_value()
+            ? std::to_string(*state.pid)
+            : "-";
+
+        std::cout
+            << std::left
+            << std::setw(18) << instance.name
+            << std::setw(12) << status
+            << std::setw(10) << pid
+            << getInstanceDir(instance).string()
+            << "\n";
+    }
 }
 
-void runInstance(const std::string& name) {
-    for (const auto& i : instances) {
-        if (i.name == name) {
-            const fs::path instanceDir = fs::path(i.path) / i.name;
-            const fs::path execPath = instanceDir / kDbInstanceFileName;
+void runInstance(const std::string& name, const bool background) {
+    const Instance* instance = findInstanceByName(name);
 
-            if (!fs::exists(execPath)) {
-                std::cout << "Instance executable not found: " << execPath << "\n";
-                return;
-            }
-
-            const bool ok = runProcess(quote(execPath.string()), instanceDir.string());
-
-            if (!ok)
-                std::cout << "Instance exited with error\n";
-
-            return;
-        }
+    if (instance == nullptr) {
+        std::cout << "Instance not found\n";
+        return;
     }
 
-    std::cout << "Instance not found\n";
+    const InstanceRunState state = getInstanceRunState(*instance);
+
+    if (state.isRunning) {
+        std::cout << "Instance is already running";
+
+        if (state.pid.has_value())
+            std::cout << " with PID " << *state.pid;
+
+        std::cout << "\n";
+        return;
+    }
+
+    const fs::path instanceDir = getInstanceDir(*instance);
+    const fs::path execPath = instanceDir / kDbInstanceFileName;
+
+    if (!fs::exists(execPath)) {
+        std::cout << "Instance executable not found: " << execPath << "\n";
+        return;
+    }
+
+    if (background) {
+        std::uint64_t processPid = 0;
+
+        if (!startProcessBackground(execPath, instanceDir, processPid)) {
+            std::cout << "Instance was not started\n";
+            return;
+        }
+
+        if (waitForInstanceRegistration(*instance, std::chrono::milliseconds(2000))) {
+            const InstanceRunState registeredState = getInstanceRunState(*instance);
+
+            std::cout << "Instance started in background";
+
+            if (registeredState.pid.has_value())
+                std::cout << ". PID: " << *registeredState.pid;
+            else
+                std::cout << ". Process PID: " << processPid;
+
+            std::cout << "\n";
+            return;
+        }
+
+        std::cout << "Process started in background. Process PID: " << processPid << "\n";
+        std::cout << "Warning: instance.pid was not created yet. Use show in a moment.\n";
+        return;
+    }
+
+    std::cout << "Instance started in foreground\n";
+
+    const bool ok = startProcessForeground(execPath, instanceDir);
+
+    if (!ok)
+        std::cout << "Instance exited with error\n";
+    else
+        std::cout << "Instance stopped\n";
 }
 
 void listModules(const std::string& moduleName) {
@@ -306,50 +815,109 @@ void modulesCommand() {
     listModules("access_interface");
 }
 
+void helpCommand() {
+    std::cout << "Available commands:\n";
+    std::cout << "  init\n";
+    std::cout << "      Start interactive instance creation wizard.\n";
+    std::cout << "      Inside init, type cancel, :cancel, abort, or :abort to leave safely.\n";
+    std::cout << "  show\n";
+    std::cout << "      Show registered instances and their runtime status.\n";
+    std::cout << "  run <name>\n";
+    std::cout << "      Run registered instance in foreground.\n";
+    std::cout << "  run -b <name>\n";
+    std::cout << "      Run registered instance in background.\n";
+    std::cout << "  run <name> -b\n";
+    std::cout << "      Same as run -b <name>.\n";
+    std::cout << "  modules\n";
+    std::cout << "      Show available module implementations.\n";
+    std::cout << "  help\n";
+    std::cout << "      Show this help.\n";
+    std::cout << "  exit\n";
+    std::cout << "      Exit manager.\n";
+}
+
 Command constructInitCommand() {
     return [](std::stringstream& ss) {
-        std::string path;
-        std::string name;
+        std::string unexpectedArg;
 
-        if (!(ss >> path >> name)) {
-            std::cout << "Usage:\n";
-            std::cout << "init <path> <name> "
-                         "[-q:parser] [-e:engine] [-r:response] [-a:access_interface]\n";
+        if (ss >> unexpectedArg) {
+            std::cout << "init does not accept command-line arguments anymore.\n";
+            std::cout << "Use just: init\n";
             return;
         }
 
-        path = removeQuotes(path);
-        name = removeQuotes(name);
+        std::cout << "Starting interactive init.\n";
+        std::cout << "Type cancel at any step to abort without creating an instance.\n";
+
+        auto pathInput = promptRequiredInitValue("Instance parent path");
+
+        if (!pathInput.has_value()) {
+            std::cout << "Init cancelled\n";
+            return;
+        }
+
+        const std::string path = *pathInput;
 
         if (!fs::exists(path)) {
             std::cout << "Path does not exist\n";
+            std::cout << "Init cancelled\n";
             return;
         }
 
-        std::string parser = "standard";
-        std::string engine = "standard";
-        std::string response = "standard";
-        std::string accessInterface = "standard";
+        auto nameInput = promptRequiredInitValue("Instance name");
 
-        std::string arg;
-
-        while (ss >> arg) {
-            if (arg.starts_with("-q:"))
-                parser = arg.substr(3);
-            else if (arg.starts_with("-e:"))
-                engine = arg.substr(3);
-            else if (arg.starts_with("-r:"))
-                response = arg.substr(3);
-            else if (arg.starts_with("-a:"))
-                accessInterface = arg.substr(3);
-            else {
-                std::cout << "Unknown argument: " << arg << "\n";
-                return;
-            }
+        if (!nameInput.has_value()) {
+            std::cout << "Init cancelled\n";
+            return;
         }
 
-        if (createInstance(path, name, parser, engine, response, accessInterface))
+        const std::string name = *nameInput;
+
+        if (containsWhitespace(name)) {
+            std::cout << "Instance name cannot contain whitespace.\n";
+            std::cout << "Init cancelled\n";
+            return;
+        }
+
+        std::cout << "Choose module implementations. Empty input means standard.\n";
+
+        auto parserInput = promptOptionalModuleImpl("query_parser", "standard");
+
+        if (!parserInput.has_value()) {
+            std::cout << "Init cancelled\n";
+            return;
+        }
+
+        auto engineInput = promptOptionalModuleImpl("engine", "standard");
+
+        if (!engineInput.has_value()) {
+            std::cout << "Init cancelled\n";
+            return;
+        }
+
+        auto responseInput = promptOptionalModuleImpl("response_constructor", "standard");
+
+        if (!responseInput.has_value()) {
+            std::cout << "Init cancelled\n";
+            return;
+        }
+
+        auto accessInterfaceInput = promptOptionalModuleImpl("access_interface", "standard");
+
+        if (!accessInterfaceInput.has_value()) {
+            std::cout << "Init cancelled\n";
+            return;
+        }
+
+        if (createInstance(
+            path,
+            name,
+            *parserInput,
+            *engineInput,
+            *responseInput,
+            *accessInterfaceInput)) {
             std::cout << "Instance created\n";
+        }
     };
 }
 
@@ -361,21 +929,64 @@ Command constructShowCommand() {
 
 Command constructRunCommand() {
     return [](std::stringstream& ss) {
+        std::string firstArg;
+
+        if (!(ss >> firstArg)) {
+            std::cout << "Usage:\n";
+            std::cout << "  run <name>\n";
+            std::cout << "  run -b <name>\n";
+            std::cout << "  run <name> -b\n";
+            return;
+        }
+
+        bool background = false;
         std::string name;
 
-        if (!(ss >> name)) {
-            std::cout << "Usage: run <name>\n";
+        if (firstArg == "-b" || firstArg == "--background") {
+            background = true;
+
+            if (!(ss >> name)) {
+                std::cout << "Usage: run -b <name>\n";
+                return;
+            }
+        }
+        else {
+            name = firstArg;
+
+            std::string secondArg;
+
+            if (ss >> secondArg) {
+                if (secondArg == "-b" || secondArg == "--background") {
+                    background = true;
+                }
+                else {
+                    std::cout << "Unknown run argument: " << secondArg << "\n";
+                    return;
+                }
+            }
+        }
+
+        std::string extraArg;
+
+        if (ss >> extraArg) {
+            std::cout << "Unknown run argument: " << extraArg << "\n";
             return;
         }
 
         name = removeQuotes(name);
-        runInstance(name);
+        runInstance(name, background);
     };
 }
 
 Command constructModulesCommand() {
     return [](std::stringstream&) {
         modulesCommand();
+    };
+}
+
+Command constructHelpCommand() {
+    return [](std::stringstream&) {
+        helpCommand();
     };
 }
 
@@ -386,18 +997,23 @@ std::unordered_map<std::string, Command> registerCommands() {
     commands["show"] = constructShowCommand();
     commands["run"] = constructRunCommand();
     commands["modules"] = constructModulesCommand();
+    commands["help"] = constructHelpCommand();
 
     return commands;
 }
 
 int main() {
+    loadInstancesRegistry();
+
     auto commands = registerCommands();
 
     std::string line;
 
     while (true) {
-        std::cout << "kvdb> ";
-        std::getline(std::cin, line);
+        std::cout << "kvdb> " << std::flush;
+
+        if (!std::getline(std::cin, line))
+            break;
 
         std::stringstream ss(line);
 

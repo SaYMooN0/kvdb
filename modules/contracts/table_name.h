@@ -17,11 +17,6 @@ namespace kvdb::contracts {
         static Creation create(std::string value);
 
         [[nodiscard]]
-        static TableName createUnsafe(std::string value) {
-            return TableName(std::move(value));
-        }
-
-        [[nodiscard]]
         const std::string& value() const noexcept {
             return value_;
         }
