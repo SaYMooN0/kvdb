@@ -832,7 +832,7 @@ namespace kvdb::modules::engine::standard {
         }
 
         void writeString(std::ostream& out, const std::string& value) {
-            const auto size = static_cast<std::uint64_t>(value.size());
+            const auto size = value.size();
             writePod(out, size);
 
             out.write(value.data(), static_cast<std::streamsize>(value.size()));
@@ -903,7 +903,7 @@ namespace kvdb::modules::engine::standard {
                 case StoredPrimitiveKind::Number:
                     writePod(out, value.number.isSigned);
                     writePod(out, value.number.byteLength);
-                    out.write(reinterpret_cast<const char*>(value.number.bytes.data()), static_cast<std::streamsize>(value.number.bytes.size()));
+                    out.write(reinterpret_cast<const char*>(value.number.bytes.data()), value.number.bytes.size());
                     if (!out) {
                         throw std::runtime_error("Failed to write number.");
                     }
