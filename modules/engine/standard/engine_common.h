@@ -70,22 +70,46 @@ namespace kvdb::modules::engine::standard {
         std::size_t operator()(const StoredPrimitive& value) const;
     };
 
-    struct StoredColValue final
+    struct StoredPlainColValue final
     {
-        ColCmdValueKind kind = ColCmdValueKind::Plain;
-
-        StoredPrimitive plain;
-        std::optional<StoredPrimitive> nullable;
-
-        std::vector<StoredPrimitive> array;
-        std::vector<std::optional<StoredPrimitive>> arrayOfNullable;
-
-        bool nullableArrayHasValue = false;
-        std::vector<StoredPrimitive> nullableArray;
-
-        bool nullableArrayOfNullableHasValue = false;
-        std::vector<std::optional<StoredPrimitive>> nullableArrayOfNullable;
+        StoredPrimitive value;
     };
+
+    struct StoredNullableColValue final
+    {
+        std::optional<StoredPrimitive> value;
+    };
+
+    struct StoredArrayColValue final
+    {
+        std::vector<StoredPrimitive> items;
+    };
+
+    struct StoredArrayOfNullableColValue final
+    {
+        std::vector<std::optional<StoredPrimitive>> items;
+    };
+
+    struct StoredNullableArrayColValue final
+    {
+        std::optional<std::vector<StoredPrimitive>> items;
+    };
+
+    struct StoredNullableArrayOfNullableColValue final
+    {
+        std::optional<std::vector<std::optional<StoredPrimitive>>> items;
+    };
+
+    using StoredColValue = std::variant<
+        StoredPlainColValue,
+        StoredNullableColValue,
+        StoredArrayColValue,
+        StoredArrayOfNullableColValue,
+        StoredNullableArrayColValue,
+        StoredNullableArrayOfNullableColValue
+    >;
+
+    ColCmdValueKind colValueKind(const StoredColValue& value);
 
     struct Table final
     {

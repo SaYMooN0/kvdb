@@ -6,10 +6,12 @@
 #include <variant>
 
 namespace kvdb::modules::engine::standard {
-    class StandardEngine final : public IEngine
+    class StandardEngine final : public kvdb::contracts::IEngine
     {
     public:
-        CmdExecResult execute(const BaseCmdDto& cmd) override {
+        kvdb::contracts::CmdExecResult execute(
+            const kvdb::contracts::BaseCmdDto& cmd
+        ) override {
             resultStorage_.clear();
 
             using namespace kvdb::contracts;
