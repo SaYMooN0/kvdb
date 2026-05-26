@@ -44,6 +44,7 @@ struct InstanceRunState
 {
     bool isRunning = false;
     std::optional<std::uint64_t> pid;
+    std::optional<std::uint16_t> port;
 };
 
 #ifdef _WIN32
@@ -57,6 +58,7 @@ constexpr const char* kModuleExtension = ".so";
 constexpr const char* kInstanceSettingsFileName = "instance_settings.txt";
 constexpr const char* kInstancesRegistryFileName = "manager_instances.txt";
 constexpr const char* kInstancePidFileName = "instance.pid";
+constexpr const char* kInstancePortFileName = "instance.port";
 constexpr const char* kInstanceStopRequestFileName = "instance.stop";
 
 std::vector<Instance> instances;
@@ -82,6 +84,25 @@ std::string trim(const std::string& s) {
         --last;
 
     return s.substr(first, last - first);
+}
+
+std::optional<std::uint16_t> tryParsePort(const std::string& value) {
+    if (value.empty())
+        return std::nullopt;
+
+    std::uint64_t parsed = 0;
+
+    for (const char ch : value) {
+        if (!std::isdigit(static_cast<unsigned char>(ch)))
+            return std::nullopt;
+
+        parsed = parsed * 10 + static_cast<std::uint64_t>(ch - '0');
+
+        if (parsed > std::numeric_limits<std::uint16_t>::max())
+            return std::nullopt;
+    }
+
+    return static_cast<std::uint16_t>(parsed);
 }
 
 bool containsWhitespace(const std::string& s) {
@@ -171,6 +192,10 @@ fs::path getInstanceDir(const Instance& instance) {
 
 fs::path getInstancePidPath(const Instance& instance) {
     return getInstanceDir(instance) / kInstancePidFileName;
+}
+
+fs::path getInstancePortPath(const Instance& instance) {
+    return getInstanceDir(instance) / kInstancePortFileName;
 }
 
 fs::path getInstanceStopRequestPath(const Instance& instance) {
@@ -499,9 +524,31 @@ std::optional<std::uint64_t> readInstancePid(const Instance& instance) {
     return pid;
 }
 
+std::optional<std::uint16_t> readInstancePort(const Instance& instance) {
+    const fs::path portPath = getInstancePortPath(instance);
+
+    if (!fs::exists(portPath))
+        return std::nullopt;
+
+    std::ifstream input(portPath);
+
+    if (!input.is_open())
+        return std::nullopt;
+
+    std::string rawPort;
+    input >> rawPort;
+
+    return tryParsePort(rawPort);
+}
+
 void removeInstancePidFile(const Instance& instance) {
     std::error_code ec;
     fs::remove(getInstancePidPath(instance), ec);
+}
+
+void removeInstancePortFile(const Instance& instance) {
+    std::error_code ec;
+    fs::remove(getInstancePortPath(instance), ec);
 }
 
 bool isProcessRunning(const std::uint64_t pid) {
@@ -542,9 +589,10 @@ InstanceRunState getInstanceRunState(const Instance& instance) {
         return {};
 
     if (isProcessRunning(*pid))
-        return {true, pid};
+        return {true, pid, readInstancePort(instance)};
 
     removeInstancePidFile(instance);
+    removeInstancePortFile(instance);
     return {};
 }
 
@@ -621,9 +669,60 @@ Command constructStopCommand() {
     };
 }
 
+std::vector<std::string> buildDbInstanceArgs(const std::optional<std::uint16_t> port) {
+    std::vector<std::string> args;
+
+    if (port.has_value()) {
+        args.emplace_back("--port");
+        args.push_back(std::to_string(*port));
+    }
+
+    return args;
+}
+
+std::string buildProcessCommandLine(
+    const fs::path& executablePath,
+    const std::optional<std::uint16_t> port
+) {
+    std::string commandLine = quote(executablePath.string());
+
+    for (const auto& arg : buildDbInstanceArgs(port)) {
+        commandLine += ' ';
+        commandLine += quote(arg);
+    }
+
+    return commandLine;
+}
+
+#ifndef _WIN32
+[[noreturn]]
+void execDbInstance(
+    const fs::path& executablePath,
+    const std::optional<std::uint16_t> port
+) {
+    std::vector<std::string> argValues;
+    argValues.push_back(executablePath.filename().string());
+
+    for (auto& arg : buildDbInstanceArgs(port))
+        argValues.push_back(std::move(arg));
+
+    std::vector<char*> argv;
+    argv.reserve(argValues.size() + 1);
+
+    for (auto& arg : argValues)
+        argv.push_back(arg.data());
+
+    argv.push_back(nullptr);
+
+    execv(executablePath.string().c_str(), argv.data());
+    _exit(127);
+}
+#endif
+
 bool startProcessForeground(
     const fs::path& executablePath,
-    const fs::path& workingDirectory
+    const fs::path& workingDirectory,
+    const std::optional<std::uint16_t> port
 ) {
 #ifdef _WIN32
     STARTUPINFOA si{};
@@ -631,7 +730,7 @@ bool startProcessForeground(
 
     si.cb = sizeof(si);
 
-    std::string cmdLine = quote(executablePath.string());
+    std::string cmdLine = buildProcessCommandLine(executablePath, port);
     std::vector<char> mutableCmdLine(cmdLine.begin(), cmdLine.end());
     mutableCmdLine.push_back('\0');
 
@@ -680,8 +779,7 @@ bool startProcessForeground(
         if (!workingDirectory.empty())
             chdir(workingDirectory.string().c_str());
 
-        execl(executablePath.string().c_str(), executablePath.filename().string().c_str(), nullptr);
-        _exit(127);
+        execDbInstance(executablePath, port);
     }
 
     int status = 0;
@@ -703,6 +801,7 @@ bool startProcessForeground(
 bool startProcessBackground(
     const fs::path& executablePath,
     const fs::path& workingDirectory,
+    const std::optional<std::uint16_t> port,
     std::uint64_t& pid
 ) {
 #ifdef _WIN32
@@ -711,7 +810,7 @@ bool startProcessBackground(
 
     si.cb = sizeof(si);
 
-    std::string cmdLine = quote(executablePath.string());
+    std::string cmdLine = buildProcessCommandLine(executablePath, port);
     std::vector<char> mutableCmdLine(cmdLine.begin(), cmdLine.end());
     mutableCmdLine.push_back('\0');
 
@@ -752,8 +851,7 @@ bool startProcessBackground(
         if (!workingDirectory.empty())
             chdir(workingDirectory.string().c_str());
 
-        execl(executablePath.string().c_str(), executablePath.filename().string().c_str(), nullptr);
-        _exit(127);
+        execDbInstance(executablePath, port);
     }
 
     pid = static_cast<std::uint64_t>(childPid);
@@ -761,7 +859,7 @@ bool startProcessBackground(
 #endif
 }
 
-bool waitForInstanceRegistration(
+bool waitForInstanceReady(
     const Instance& instance,
     const std::chrono::milliseconds timeout
 ) {
@@ -770,7 +868,7 @@ bool waitForInstanceRegistration(
     while (std::chrono::steady_clock::now() - startedAt < timeout) {
         const InstanceRunState state = getInstanceRunState(instance);
 
-        if (state.isRunning)
+        if (state.isRunning && state.port.has_value())
             return true;
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -790,6 +888,7 @@ void showInstances() {
         << std::setw(18) << "NAME"
         << std::setw(12) << "STATUS"
         << std::setw(10) << "PID"
+        << std::setw(8) << "PORT"
         << "DIRECTORY"
         << "\n";
 
@@ -803,17 +902,26 @@ void showInstances() {
                                     ? std::to_string(*state.pid)
                                     : "-";
 
+        const std::string port = state.port.has_value()
+                                     ? std::to_string(*state.port)
+                                     : "-";
+
         std::cout
             << std::left
             << std::setw(18) << instance.name
             << std::setw(12) << status
             << std::setw(10) << pid
+            << std::setw(8) << port
             << getInstanceDir(instance).string()
             << "\n";
     }
 }
 
-void runInstance(const std::string& name, const bool background) {
+void runInstance(
+    const std::string& name,
+    const bool background,
+    const std::optional<std::uint16_t> port
+) {
     const Instance* instance = findInstanceByName(name);
 
     if (instance == nullptr) {
@@ -828,6 +936,9 @@ void runInstance(const std::string& name, const bool background) {
 
         if (state.pid.has_value())
             std::cout << " with PID " << *state.pid;
+
+        if (state.port.has_value())
+            std::cout << " on port " << *state.port;
 
         std::cout << "\n";
         return;
@@ -844,12 +955,12 @@ void runInstance(const std::string& name, const bool background) {
     if (background) {
         std::uint64_t processPid = 0;
 
-        if (!startProcessBackground(execPath, instanceDir, processPid)) {
+        if (!startProcessBackground(execPath, instanceDir, port, processPid)) {
             std::cout << "Instance was not started\n";
             return;
         }
 
-        if (waitForInstanceRegistration(*instance, std::chrono::milliseconds(2000))) {
+        if (waitForInstanceReady(*instance, std::chrono::milliseconds(3000))) {
             const InstanceRunState registeredState = getInstanceRunState(*instance);
 
             std::cout << "Instance started in background";
@@ -859,18 +970,30 @@ void runInstance(const std::string& name, const bool background) {
             else
                 std::cout << ". Process PID: " << processPid;
 
+            if (registeredState.port.has_value())
+                std::cout << ". Port: " << *registeredState.port;
+
             std::cout << "\n";
             return;
         }
 
+        const InstanceRunState currentState = getInstanceRunState(*instance);
+
         std::cout << "Process started in background. Process PID: " << processPid << "\n";
-        std::cout << "Warning: instance.pid was not created yet. Use show in a moment.\n";
+
+        if (currentState.isRunning && !currentState.port.has_value()) {
+            std::cout << "Warning: instance.port was not created yet. Use show in a moment.\n";
+        }
+        else {
+            std::cout << "Warning: instance.pid was not created yet. Use show in a moment.\n";
+        }
+
         return;
     }
 
     std::cout << "Instance started in foreground\n";
 
-    const bool ok = startProcessForeground(execPath, instanceDir);
+    const bool ok = startProcessForeground(execPath, instanceDir, port);
 
     if (!ok)
         std::cout << "Instance exited with error\n";
@@ -915,11 +1038,11 @@ void helpCommand() {
     std::cout << "      Inside init, type cancel, :cancel, abort, or :abort to leave safely.\n";
     std::cout << "  show\n";
     std::cout << "      Show registered instances and their runtime status.\n";
-    std::cout << "  run <name>\n";
-    std::cout << "      Run registered instance in foreground.\n";
-    std::cout << "  run -b <name>\n";
+    std::cout << "  run <name> [--port <port>]\n";
+    std::cout << "      Run registered instance in foreground. If port is not passed, a free port is chosen.\n";
+    std::cout << "  run -b <name> [--port <port>]\n";
     std::cout << "      Run registered instance in background.\n";
-    std::cout << "  run <name> -b\n";
+    std::cout << "  run <name> -b [--port <port>]\n";
     std::cout << "      Same as run -b <name>.\n";
     std::cout << "  stop <name>\n";
     std::cout << "      Gracefully stop running instance.\n";
@@ -1024,52 +1147,75 @@ Command constructShowCommand() {
 
 Command constructRunCommand() {
     return [](std::stringstream& ss) {
-        std::string firstArg;
-
-        if (!(ss >> firstArg)) {
-            std::cout << "Usage:\n";
-            std::cout << "  run <name>\n";
-            std::cout << "  run -b <name>\n";
-            std::cout << "  run <name> -b\n";
-            return;
-        }
-
         bool background = false;
+        std::optional<std::uint16_t> port;
         std::string name;
+        std::string arg;
 
-        if (firstArg == "-b" || firstArg == "--background") {
-            background = true;
-
-            if (!(ss >> name)) {
-                std::cout << "Usage: run -b <name>\n";
-                return;
+        while (ss >> arg) {
+            if (arg == "-b" || arg == "--background") {
+                background = true;
+                continue;
             }
-        }
-        else {
-            name = firstArg;
 
-            std::string secondArg;
+            if (arg == "-p" || arg == "--port") {
+                std::string portText;
 
-            if (ss >> secondArg) {
-                if (secondArg == "-b" || secondArg == "--background") {
-                    background = true;
-                }
-                else {
-                    std::cout << "Unknown run argument: " << secondArg << "\n";
+                if (!(ss >> portText)) {
+                    std::cout << "Expected port after " << arg << "\n";
                     return;
                 }
+
+                auto parsedPort = tryParsePort(removeQuotes(portText));
+
+                if (!parsedPort.has_value()) {
+                    std::cout << "Port must be a number from 0 to 65535\n";
+                    return;
+                }
+
+                port = parsedPort;
+                continue;
             }
-        }
 
-        std::string extraArg;
+            if (arg.starts_with("--port=")) {
+                auto parsedPort = tryParsePort(arg.substr(7));
 
-        if (ss >> extraArg) {
-            std::cout << "Unknown run argument: " << extraArg << "\n";
+                if (!parsedPort.has_value()) {
+                    std::cout << "Port must be a number from 0 to 65535\n";
+                    return;
+                }
+
+                port = parsedPort;
+                continue;
+            }
+
+            if (name.empty()) {
+                name = removeQuotes(arg);
+                continue;
+            }
+
+            if (!port.has_value()) {
+                auto parsedPort = tryParsePort(removeQuotes(arg));
+
+                if (parsedPort.has_value()) {
+                    port = parsedPort;
+                    continue;
+                }
+            }
+
+            std::cout << "Unknown run argument: " << arg << "\n";
             return;
         }
 
-        name = removeQuotes(name);
-        runInstance(name, background);
+        if (name.empty()) {
+            std::cout << "Usage:\n";
+            std::cout << "  run <name> [--port <port>]\n";
+            std::cout << "  run -b <name> [--port <port>]\n";
+            std::cout << "  run <name> -b [--port <port>]\n";
+            return;
+        }
+
+        runInstance(name, background, port);
     };
 }
 

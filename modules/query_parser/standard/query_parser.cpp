@@ -10,6 +10,7 @@
 #include <variant>
 
 #include "query_parser_common.h"
+#include "module_export.h"
 
 namespace kvdb::modules::query_parser::standard {
     using namespace kvdb::contracts;
@@ -625,12 +626,12 @@ namespace kvdb::modules::query_parser::standard {
     };
 }
 
-extern "C" __declspec(dllexport)
+extern "C" KVDB_MODULE_EXPORT
 kvdb::contracts::IQueryParser* create_query_parser() {
     return new kvdb::modules::query_parser::standard::StandardQueryParser();
 }
 
-extern "C" __declspec(dllexport)
+extern "C" KVDB_MODULE_EXPORT
 void destroy_query_parser(kvdb::contracts::IQueryParser* ptr) {
     delete ptr;
 }

@@ -12,3 +12,7 @@ target_compile_features(kvdb_contracts
         PUBLIC
         cxx_std_20
 )
+
+set_target_properties(kvdb_contracts PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+)

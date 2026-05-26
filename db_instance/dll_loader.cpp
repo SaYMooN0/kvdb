@@ -5,9 +5,26 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 namespace kvdb::db_instance {
+    namespace {
+#ifndef _WIN32
+        [[nodiscard]]
+        std::string getLastDlErrorMessage() {
+            const char* error = dlerror();
+
+            if (error == nullptr) {
+                return "No additional information.";
+            }
+
+            return error;
+        }
+#endif
+    }
+
     DynamicLibrary::DynamicLibrary(const std::filesystem::path& path) {
         load(path);
     }
@@ -21,8 +38,9 @@ namespace kvdb::db_instance {
           path_(std::move(other.path_)) {}
 
     DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
-        if (this == &other)
+        if (this == &other) {
             return *this;
+        }
 
         unload();
 
@@ -33,9 +51,9 @@ namespace kvdb::db_instance {
     }
 
     void DynamicLibrary::load(const std::filesystem::path& path) {
-#ifdef _WIN32
         unload();
 
+#ifdef _WIN32
         const auto moduleHandle = LoadLibraryW(path.c_str());
 
         if (moduleHandle == nullptr) {
@@ -45,20 +63,36 @@ namespace kvdb::db_instance {
         }
 
         handle_ = reinterpret_cast<void*>(moduleHandle);
-        path_ = path;
 #else
-        throw std::runtime_error("DynamicLibrary is implemented only for Windows in this project.");
+        dlerror();
+
+        void* moduleHandle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+
+        if (moduleHandle == nullptr) {
+            throw std::runtime_error(
+                "Failed to load shared library: " + path.string() +
+                ". " + getLastDlErrorMessage());
+        }
+
+        handle_ = moduleHandle;
 #endif
+
+        path_ = path;
     }
 
     void DynamicLibrary::unload() noexcept {
-#ifdef _WIN32
-        if (handle_ != nullptr) {
-            FreeLibrary(reinterpret_cast<HMODULE>(handle_));
-            handle_ = nullptr;
-            path_.clear();
+        if (handle_ == nullptr) {
+            return;
         }
+
+#ifdef _WIN32
+        FreeLibrary(reinterpret_cast<HMODULE>(handle_));
+#else
+        dlclose(handle_);
 #endif
+
+        handle_ = nullptr;
+        path_.clear();
     }
 
     bool DynamicLibrary::isLoaded() const noexcept {
@@ -66,11 +100,11 @@ namespace kvdb::db_instance {
     }
 
     void* DynamicLibrary::getSymbolRaw(const char* symbolName) const {
-#ifdef _WIN32
         if (handle_ == nullptr) {
             throw std::runtime_error("Attempt to resolve symbol from an unloaded library.");
         }
 
+#ifdef _WIN32
         const auto symbol = GetProcAddress(
             reinterpret_cast<HMODULE>(handle_),
             symbolName);
@@ -84,7 +118,18 @@ namespace kvdb::db_instance {
 
         return reinterpret_cast<void*>(symbol);
 #else
-        throw std::runtime_error("DynamicLibrary is implemented only for Windows in this project.");
+        dlerror();
+
+        void* symbol = dlsym(handle_, symbolName);
+
+        if (symbol == nullptr) {
+            throw std::runtime_error(
+                "Failed to resolve symbol '" + std::string(symbolName) +
+                "' from shared library: " + path_.string() +
+                ". " + getLastDlErrorMessage());
+        }
+
+        return symbol;
 #endif
     }
 
@@ -92,8 +137,9 @@ namespace kvdb::db_instance {
 #ifdef _WIN32
         const DWORD errorCode = GetLastError();
 
-        if (errorCode == 0)
+        if (errorCode == 0) {
             return "No additional information.";
+        }
 
         LPSTR rawMessage = nullptr;
 
@@ -110,13 +156,16 @@ namespace kvdb::db_instance {
 
         std::string result;
 
-        if (size == 0 || rawMessage == nullptr)
+        if (size == 0 || rawMessage == nullptr) {
             result = "Unknown Windows error.";
-        else
+        }
+        else {
             result.assign(rawMessage, size);
+        }
 
-        if (rawMessage != nullptr)
+        if (rawMessage != nullptr) {
             LocalFree(rawMessage);
+        }
 
         while (!result.empty() &&
             (result.back() == '\n' || result.back() == '\r')) {

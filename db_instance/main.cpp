@@ -32,6 +32,7 @@ namespace kvdb::db_instance {
     namespace {
         constexpr const char* kInstanceSettingsFileName = "instance_settings.txt";
         constexpr const char* kInstancePidFileName = "instance.pid";
+        constexpr const char* kInstancePortFileName = "instance.port";
         constexpr const char* kInstanceStopRequestFileName = "instance.stop";
 
         struct InstanceSettings final
@@ -40,6 +41,12 @@ namespace kvdb::db_instance {
             std::string queryParserDllFileName;
             std::string accessInterfaceDllFileName;
             std::string responseConstructorDllFileName;
+        };
+
+        struct CommandLineOptions final
+        {
+            fs::path settingsPath;
+            std::uint16_t preferredPort = 0;
         };
 
         [[nodiscard]]
@@ -56,6 +63,92 @@ namespace kvdb::db_instance {
             const auto endIt = std::find_if(value.rbegin(), value.rend(), isNotSpace).base();
 
             return std::string(beginIt, endIt);
+        }
+
+        [[nodiscard]]
+        std::uint16_t parsePort(std::string_view rawPort) {
+            if (rawPort.empty()) {
+                throw std::runtime_error("Port value cannot be empty.");
+            }
+
+            std::uint64_t parsed = 0;
+
+            for (const char ch : rawPort) {
+                if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                    throw std::runtime_error("Port must be a number from 0 to 65535.");
+                }
+
+                parsed = parsed * 10 + static_cast<std::uint64_t>(ch - '0');
+
+                if (parsed > std::numeric_limits<std::uint16_t>::max()) {
+                    throw std::runtime_error("Port must be a number from 0 to 65535.");
+                }
+            }
+
+            return static_cast<std::uint16_t>(parsed);
+        }
+
+        [[nodiscard]]
+        CommandLineOptions parseCommandLine(
+            int argc,
+            char** argv,
+            const fs::path& defaultSettingsPath
+        ) {
+            CommandLineOptions result{
+                .settingsPath = defaultSettingsPath,
+                .preferredPort = 0
+            };
+
+            bool settingsPathWasProvided = false;
+
+            for (int i = 1; i < argc; ++i) {
+                const std::string arg = argv[i];
+
+                if (arg == "--port" || arg == "-p") {
+                    if (i + 1 >= argc) {
+                        throw std::runtime_error("Expected port after " + arg + ".");
+                    }
+
+                    result.preferredPort = parsePort(argv[++i]);
+                    continue;
+                }
+
+                if (arg == "--settings" || arg == "-s") {
+                    if (i + 1 >= argc) {
+                        throw std::runtime_error("Expected settings file path after " + arg + ".");
+                    }
+
+                    result.settingsPath = fs::path(argv[++i]);
+                    settingsPathWasProvided = true;
+                    continue;
+                }
+
+                if (arg.starts_with("--port=")) {
+                    result.preferredPort = parsePort(std::string_view(arg).substr(7));
+                    continue;
+                }
+
+                if (arg.starts_with("--settings=")) {
+                    result.settingsPath = fs::path(arg.substr(11));
+                    settingsPathWasProvided = true;
+                    continue;
+                }
+
+                if (!settingsPathWasProvided) {
+                    // Backward-compatible mode: db_instance path/to/instance_settings.txt
+                    result.settingsPath = fs::path(arg);
+                    settingsPathWasProvided = true;
+                    continue;
+                }
+
+                throw std::runtime_error("Unknown db_instance argument: " + arg + ".");
+            }
+
+            if (result.settingsPath.is_relative()) {
+                result.settingsPath = fs::absolute(result.settingsPath);
+            }
+
+            return result;
         }
 
         [[nodiscard]]
@@ -159,6 +252,16 @@ namespace kvdb::db_instance {
                 return false;
 
             output << pid << '\n';
+            return true;
+        }
+
+        bool writePortToFile(const fs::path& portPath, const std::uint16_t port) {
+            std::ofstream output(portPath);
+
+            if (!output.is_open())
+                return false;
+
+            output << port << '\n';
             return true;
         }
 
@@ -319,9 +422,19 @@ namespace kvdb::db_instance {
             return instanceDir / kInstanceStopRequestFileName;
         }
 
+        [[nodiscard]]
+        fs::path getPortPath(const fs::path& instanceDir) {
+            return instanceDir / kInstancePortFileName;
+        }
+
         void removeStopRequestFile(const fs::path& instanceDir) {
             std::error_code ec;
             fs::remove(getStopRequestPath(instanceDir), ec);
+        }
+
+        void removePortFile(const fs::path& instanceDir) {
+            std::error_code ec;
+            fs::remove(getPortPath(instanceDir), ec);
         }
 
         [[nodiscard]]
@@ -333,22 +446,15 @@ namespace kvdb::db_instance {
     int run(int argc, char** argv) {
         try {
             const fs::path executableDir = getExecutableDirectory();
+            const CommandLineOptions commandLine = parseCommandLine(
+                argc,
+                argv,
+                executableDir / kInstanceSettingsFileName
+            );
 
             InstanceRuntimeRegistration runtimeRegistration(executableDir);
 
-            fs::path settingsPath;
-
-            if (argc >= 2) {
-                settingsPath = fs::path(argv[1]);
-
-                if (settingsPath.is_relative())
-                    settingsPath = fs::absolute(settingsPath);
-            }
-            else {
-                settingsPath = executableDir / kInstanceSettingsFileName;
-            }
-
-            const InstanceSettings settings = readInstanceSettings(settingsPath);
+            const InstanceSettings settings = readInstanceSettings(commandLine.settingsPath);
 
             const fs::path engineDllPath =
                 resolveDllPath(executableDir, settings.engineDllFileName);
@@ -391,18 +497,24 @@ namespace kvdb::db_instance {
             std::cout << "Starting access interface...\n";
 
             removeStopRequestFile(executableDir);
+            removePortFile(executableDir);
 
             engineModule.get().onInstanceStart();
 
             std::atomic_bool accessInterfaceStopped = false;
             std::exception_ptr accessInterfaceException = nullptr;
 
+            const kvdb::contracts::AccessInterfaceStartOptions startOptions{
+                .preferredPort = commandLine.preferredPort
+            };
+
             std::thread accessInterfaceThread([&] {
                 try {
                     accessInterfaceModule.get().start(
                         queryParserModule.get(),
                         engineModule.get(),
-                        responseConstructorModule.get());
+                        responseConstructorModule.get(),
+                        startOptions);
                 }
                 catch (...) {
                     accessInterfaceException = std::current_exception();
@@ -410,6 +522,27 @@ namespace kvdb::db_instance {
 
                 accessInterfaceStopped = true;
             });
+
+            bool portWasWritten = false;
+
+            while (!accessInterfaceStopped && !portWasWritten) {
+                const std::uint16_t boundPort = accessInterfaceModule.get().boundPort();
+
+                if (boundPort != 0) {
+                    const fs::path portPath = getPortPath(executableDir);
+
+                    if (!writePortToFile(portPath, boundPort)) {
+                        throw std::runtime_error(
+                            "Failed to write instance port file: " + portPath.string());
+                    }
+
+                    portWasWritten = true;
+                    std::cout << "Access interface bound port: " << boundPort << '\n';
+                    break;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
 
             while (!accessInterfaceStopped) {
                 if (hasStopRequest(executableDir)) {
@@ -428,6 +561,7 @@ namespace kvdb::db_instance {
                 accessInterfaceThread.join();
 
             engineModule.get().onInstanceShutdown();
+            removePortFile(executableDir);
 
             if (accessInterfaceException != nullptr)
                 std::rethrow_exception(accessInterfaceException);

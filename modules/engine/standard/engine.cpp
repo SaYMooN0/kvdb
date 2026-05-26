@@ -4,6 +4,7 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include "module_export.h"
 
 namespace kvdb::modules::engine::standard {
     class StandardEngine final : public kvdb::contracts::IEngine
@@ -344,12 +345,12 @@ namespace kvdb::modules::engine::standard {
     };
 }
 
-extern "C" __declspec(dllexport)
+extern "C" KVDB_MODULE_EXPORT
 kvdb::contracts::IEngine* create_engine() {
     return new kvdb::modules::engine::standard::StandardEngine();
 }
 
-extern "C" __declspec(dllexport)
+extern "C" KVDB_MODULE_EXPORT
 void destroy_engine(kvdb::contracts::IEngine* ptr) {
     delete ptr;
 }

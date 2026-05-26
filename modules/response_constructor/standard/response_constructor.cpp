@@ -10,6 +10,7 @@
 #include <string_view>
 #include <type_traits>
 #include <variant>
+#include "module_export.h"
 
 namespace kvdb::modules::response_constructor::standard {
     namespace {
@@ -23,45 +24,45 @@ namespace kvdb::modules::response_constructor::standard {
 
             for (const unsigned char ch : value) {
                 switch (ch) {
-                    case '"':
-                        result += "\\\"";
-                        break;
+                case '"':
+                    result += "\\\"";
+                    break;
 
-                    case '\\':
-                        result += "\\\\";
-                        break;
+                case '\\':
+                    result += "\\\\";
+                    break;
 
-                    case '\b':
-                        result += "\\b";
-                        break;
+                case '\b':
+                    result += "\\b";
+                    break;
 
-                    case '\f':
-                        result += "\\f";
-                        break;
+                case '\f':
+                    result += "\\f";
+                    break;
 
-                    case '\n':
-                        result += "\\n";
-                        break;
+                case '\n':
+                    result += "\\n";
+                    break;
 
-                    case '\r':
-                        result += "\\r";
-                        break;
+                case '\r':
+                    result += "\\r";
+                    break;
 
-                    case '\t':
-                        result += "\\t";
-                        break;
+                case '\t':
+                    result += "\\t";
+                    break;
 
-                    default:
-                        if (ch < 0x20) {
-                            result += "\\u00";
-                            result += hex[(ch >> 4) & 0x0F];
-                            result += hex[ch & 0x0F];
-                        }
-                        else {
-                            result += static_cast<char>(ch);
-                        }
+                default:
+                    if (ch < 0x20) {
+                        result += "\\u00";
+                        result += hex[(ch >> 4) & 0x0F];
+                        result += hex[ch & 0x0F];
+                    }
+                    else {
+                        result += static_cast<char>(ch);
+                    }
 
-                        break;
+                    break;
                 }
             }
 
@@ -185,14 +186,14 @@ namespace kvdb::modules::response_constructor::standard {
 
         std::string transactionOpKindToString(const TransactionOpKind operation) {
             switch (operation) {
-                case TransactionOpKind::Begin:
-                    return "begin";
+            case TransactionOpKind::Begin:
+                return "begin";
 
-                case TransactionOpKind::Commit:
-                    return "commit";
+            case TransactionOpKind::Commit:
+                return "commit";
 
-                case TransactionOpKind::Rollback:
-                    return "rollback";
+            case TransactionOpKind::Rollback:
+                return "rollback";
             }
 
             return "unknown";
@@ -200,29 +201,29 @@ namespace kvdb::modules::response_constructor::standard {
 
         std::string typeKindToString(const CmdTypeKind type) {
             switch (type) {
-                case CmdTypeKind::Uuid:
-                    return "uuid";
+            case CmdTypeKind::Uuid:
+                return "uuid";
 
-                case CmdTypeKind::CharSeq:
-                    return "charseq";
+            case CmdTypeKind::CharSeq:
+                return "charseq";
 
-                case CmdTypeKind::Int:
-                    return "int";
+            case CmdTypeKind::Int:
+                return "int";
 
-                case CmdTypeKind::UInt:
-                    return "uint";
+            case CmdTypeKind::UInt:
+                return "uint";
 
-                case CmdTypeKind::Bool:
-                    return "bool";
+            case CmdTypeKind::Bool:
+                return "bool";
 
-                case CmdTypeKind::Float:
-                    return "float";
+            case CmdTypeKind::Float:
+                return "float";
 
-                case CmdTypeKind::Nullable:
-                    return "nullable";
+            case CmdTypeKind::Nullable:
+                return "nullable";
 
-                case CmdTypeKind::Array:
-                    return "array";
+            case CmdTypeKind::Array:
+                return "array";
             }
 
             return "unknown";
@@ -230,42 +231,42 @@ namespace kvdb::modules::response_constructor::standard {
 
         std::string primitiveValueToJson(const PrimitiveCmdValue& value) {
             switch (value.kind) {
-                case PrimitiveCmdValueKind::Uuid:
-                    return "{"
-                        R"("kind":"uuid",)"
-                        R"("value":)" + jsonString(uuidToString(value.uuid))
-                        + "}";
+            case PrimitiveCmdValueKind::Uuid:
+                return "{"
+                    R"("kind":"uuid",)"
+                    R"("value":)" + jsonString(uuidToString(value.uuid))
+                    + "}";
 
-                case PrimitiveCmdValueKind::CharSeq:
-                    return "{"
-                        R"("kind":"charseq",)"
-                        R"("value":)" + jsonString(
-                            std::string_view{
-                                value.charSeq.utf8Value,
-                                value.charSeq.byteLength
-                            }
-                        )
-                        + "}";
+            case PrimitiveCmdValueKind::CharSeq:
+                return "{"
+                    R"("kind":"charseq",)"
+                    R"("value":)" + jsonString(
+                        std::string_view{
+                            value.charSeq.utf8Value,
+                            value.charSeq.byteLength
+                        }
+                    )
+                    + "}";
 
-                case PrimitiveCmdValueKind::Number:
-                    return "{"
-                        R"("kind":"number",)"
-                        R"("value":)" + numberToJsonValue(value.number) + ","
-                        R"("isSigned":)" + jsonBool(value.number.isSigned) + ","
-                        R"("byteLength":)" + std::to_string(value.number.byteLength)
-                        + "}";
+            case PrimitiveCmdValueKind::Number:
+                return "{"
+                    R"("kind":"number",)"
+                    R"("value":)" + numberToJsonValue(value.number) + ","
+                    R"("isSigned":)" + jsonBool(value.number.isSigned) + ","
+                    R"("byteLength":)" + std::to_string(value.number.byteLength)
+                    + "}";
 
-                case PrimitiveCmdValueKind::Bool:
-                    return "{"
-                        R"("kind":"bool",)"
-                        R"("value":)" + jsonBool(value.boolean.value)
-                        + "}";
+            case PrimitiveCmdValueKind::Bool:
+                return "{"
+                    R"("kind":"bool",)"
+                    R"("value":)" + jsonBool(value.boolean.value)
+                    + "}";
 
-                case PrimitiveCmdValueKind::Float:
-                    return "{"
-                        R"("kind":"float",)"
-                        R"("value":)" + jsonDouble(value.floating.value)
-                        + "}";
+            case PrimitiveCmdValueKind::Float:
+                return "{"
+                    R"("kind":"float",)"
+                    R"("value":)" + jsonDouble(value.floating.value)
+                    + "}";
             }
 
             return R"({"kind":"unknown","value":null})";
@@ -315,52 +316,52 @@ namespace kvdb::modules::response_constructor::standard {
 
         std::string colValueToJson(const ColCmdValue& value) {
             switch (value.kind) {
-                case ColCmdValueKind::Plain:
-                    return "{"
-                        R"("kind":"plain",)"
-                        R"("value":)" + primitiveValueToJson(value.plain)
-                        + "}";
+            case ColCmdValueKind::Plain:
+                return "{"
+                    R"("kind":"plain",)"
+                    R"("value":)" + primitiveValueToJson(value.plain)
+                    + "}";
 
-                case ColCmdValueKind::Nullable:
-                    return "{"
-                        R"("kind":"nullable",)"
-                        R"("hasValue":)" + jsonBool(value.nullable.hasValue) + ","
-                        R"("value":)" + nullablePrimitiveValueToJson(value.nullable)
-                        + "}";
+            case ColCmdValueKind::Nullable:
+                return "{"
+                    R"("kind":"nullable",)"
+                    R"("hasValue":)" + jsonBool(value.nullable.hasValue) + ","
+                    R"("value":)" + nullablePrimitiveValueToJson(value.nullable)
+                    + "}";
 
-                case ColCmdValueKind::Array:
-                    return "{"
-                        R"("kind":"array",)"
-                        R"("items":)" + primitiveArrayToJson(value.array)
-                        + "}";
+            case ColCmdValueKind::Array:
+                return "{"
+                    R"("kind":"array",)"
+                    R"("items":)" + primitiveArrayToJson(value.array)
+                    + "}";
 
-                case ColCmdValueKind::ArrayOfNullable:
-                    return "{"
-                        R"("kind":"arrayOfNullable",)"
-                        R"("items":)" + nullablePrimitiveArrayToJson(value.arrayOfNullable)
-                        + "}";
+            case ColCmdValueKind::ArrayOfNullable:
+                return "{"
+                    R"("kind":"arrayOfNullable",)"
+                    R"("items":)" + nullablePrimitiveArrayToJson(value.arrayOfNullable)
+                    + "}";
 
-                case ColCmdValueKind::NullableArray:
-                    return "{"
-                        R"("kind":"nullableArray",)"
-                        R"("hasValue":)" + jsonBool(value.nullableArray.hasValue) + ","
-                        R"("items":)" + (
-                            value.nullableArray.hasValue
-                                ? primitiveArrayToJson(value.nullableArray.value)
-                                : "null"
-                        )
-                        + "}";
+            case ColCmdValueKind::NullableArray:
+                return "{"
+                    R"("kind":"nullableArray",)"
+                    R"("hasValue":)" + jsonBool(value.nullableArray.hasValue) + ","
+                    R"("items":)" + (
+                        value.nullableArray.hasValue
+                            ? primitiveArrayToJson(value.nullableArray.value)
+                            : "null"
+                    )
+                    + "}";
 
-                case ColCmdValueKind::NullableArrayOfNullable:
-                    return "{"
-                        R"("kind":"nullableArrayOfNullable",)"
-                        R"("hasValue":)" + jsonBool(value.nullableArrayOfNullable.hasValue) + ","
-                        R"("items":)" + (
-                            value.nullableArrayOfNullable.hasValue
-                                ? nullablePrimitiveArrayToJson(value.nullableArrayOfNullable.value)
-                                : "null"
-                        )
-                        + "}";
+            case ColCmdValueKind::NullableArrayOfNullable:
+                return "{"
+                    R"("kind":"nullableArrayOfNullable",)"
+                    R"("hasValue":)" + jsonBool(value.nullableArrayOfNullable.hasValue) + ","
+                    R"("items":)" + (
+                        value.nullableArrayOfNullable.hasValue
+                            ? nullablePrimitiveArrayToJson(value.nullableArrayOfNullable.value)
+                            : "null"
+                    )
+                    + "}";
             }
 
             return R"({"kind":"unknown","value":null})";
@@ -481,12 +482,12 @@ namespace kvdb::modules::response_constructor::standard {
     };
 }
 
-extern "C" __declspec(dllexport)
+extern "C" KVDB_MODULE_EXPORT
 kvdb::contracts::IResponseConstructor* create_response_constructor() {
     return new kvdb::modules::response_constructor::standard::StandardResponseConstructor();
 }
 
-extern "C" __declspec(dllexport)
+extern "C" KVDB_MODULE_EXPORT
 void destroy_response_constructor(kvdb::contracts::IResponseConstructor* ptr) {
     delete ptr;
 }

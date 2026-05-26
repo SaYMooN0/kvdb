@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "cmds/cmd_dtos.h"
@@ -8,6 +9,12 @@
 #include "err.h"
 
 namespace kvdb::contracts {
+    struct AccessInterfaceStartOptions final
+    {
+        // 0 means: choose any currently free TCP port automatically.
+        std::uint16_t preferredPort = 0;
+    };
+
     class IEngine
     {
     public:
@@ -60,8 +67,13 @@ namespace kvdb::contracts {
         virtual void start(
             IQueryParser& queryParser,
             IEngine& engine,
-            IResponseConstructor& responseConstructor
+            IResponseConstructor& responseConstructor,
+            const AccessInterfaceStartOptions& startOptions
         ) = 0;
+
+        [[nodiscard]]
+        virtual std::uint16_t boundPort() const noexcept = 0;
+
         virtual void requestStop() = 0;
     };
 }

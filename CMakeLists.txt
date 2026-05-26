@@ -13,11 +13,16 @@ set(KVDB_MODULES_OUTPUT_DIR "${KVDB_DIST_DIR}/modules")
 set(KVDB_LIB_OUTPUT_DIR "${KVDB_DIST_DIR}/lib")
 set(KVDB_TESTS_OUTPUT_DIR "${KVDB_DIST_DIR}/tests")
 
+option(KVDB_BUILD_TESTS "Build kvdb tests" ON)
+
 add_subdirectory(modules)
 add_subdirectory(db_instance)
 add_subdirectory(manager_project)
 
-add_subdirectory(third_party/Catch2)
+if (KVDB_BUILD_TESTS)
+    add_subdirectory(third_party/Catch2)
 
-enable_testing()
-add_subdirectory(tests)
+    enable_testing()
+
+    add_subdirectory(tests)
+endif()

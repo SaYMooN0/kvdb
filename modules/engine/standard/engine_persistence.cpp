@@ -97,7 +97,10 @@ namespace kvdb::modules::engine::standard {
         case StoredPrimitiveKind::Number:
             writePod(out, value.number.isSigned);
             writePod(out, value.number.byteLength);
-            out.write(reinterpret_cast<const char*>(value.number.bytes.data()), value.number.bytes.size());
+            out.write(
+                reinterpret_cast<const char*>(value.number.bytes.data()),
+                static_cast<std::streamsize>(value.number.bytes.size())
+            );
             if (!out) {
                 throw std::runtime_error("Failed to write number.");
             }
@@ -132,7 +135,16 @@ namespace kvdb::modules::engine::standard {
         case StoredPrimitiveKind::Number:
             result.number.isSigned = readPod<bool>(in);
             result.number.byteLength = readPod<std::uint8_t>(in);
-            in.read(reinterpret_cast<char*>(result.number.bytes.data()), result.number.bytes.size());
+
+            if (result.number.byteLength == 0 || result.number.byteLength > MaxNumberByteLength) {
+                throw std::runtime_error("Invalid stored number byte length in engine state.");
+            }
+
+            result.number.bytes.resize(result.number.byteLength);
+            in.read(
+                reinterpret_cast<char*>(result.number.bytes.data()),
+                static_cast<std::streamsize>(result.number.bytes.size())
+            );
             if (!in) {
                 throw std::runtime_error("Failed to read number.");
             }

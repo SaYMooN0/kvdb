@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -89,15 +90,9 @@ namespace kvdb::modules::engine::standard {
     }
 
     bool operator==(const StoredNumber& left, const StoredNumber& right) {
-        if (left.isSigned != right.isSigned || left.byteLength != right.byteLength) {
-            return false;
-        }
-
-        return std::equal(
-            left.bytes.begin(),
-            left.bytes.begin() + left.byteLength,
-            right.bytes.begin()
-        );
+        return left.isSigned == right.isSigned
+            && left.byteLength == right.byteLength
+            && left.bytes == right.bytes;
     }
 
     bool operator==(const StoredPrimitive& left, const StoredPrimitive& right) {
@@ -305,7 +300,7 @@ namespace kvdb::modules::engine::standard {
         StoredNumber result;
         result.isSigned = isSigned;
         result.byteLength = targetByteLength;
-        result.bytes.fill(0);
+        result.bytes.assign(static_cast<std::size_t>(targetByteLength), fillByte);
 
         const auto bytesToCopy = std::min<std::size_t>(
             value.byteLength,
@@ -313,12 +308,16 @@ namespace kvdb::modules::engine::standard {
         );
 
         std::copy_n(value.bytes.begin(), bytesToCopy, result.bytes.begin());
-
-        for (std::size_t i = bytesToCopy; i < targetByteLength; ++i) {
-            result.bytes[i] = fillByte;
-        }
-
         return result;
+    }
+
+    std::string formatByteLimit(const std::uint16_t declaredByteLength) {
+        return std::to_string(declaredByteLength) + " byte(s) (" +
+            std::to_string(static_cast<std::uint32_t>(declaredByteLength) * 8U) + " bits)";
+    }
+
+    std::string formatActualByteLength(const std::uint8_t byteLength) {
+        return std::to_string(static_cast<std::uint32_t>(byteLength)) + " byte(s)";
     }
 
     std::variant<StoredNumber, CmdExecErr> normalizeSignedInteger(
@@ -326,12 +325,14 @@ namespace kvdb::modules::engine::standard {
         const std::uint16_t declaredByteLength
     ) {
         if (!isValidNumberByteLength(value.byteLength)) {
-            return invalidValue("Invalid number byte length.");
+            return invalidValue(
+                "Invalid number byte length: " + formatActualByteLength(value.byteLength) + ". Allowed range is 1..16 byte(s).");
         }
 
         if (declaredByteLength == 0 || declaredByteLength > MaxNumberByteLength) {
             return schemaMismatch(
-                "Declared int byte count must be between 1 and 16."
+                "Declared int byte count must be between 1 and 16. Actual: " +
+                std::to_string(declaredByteLength) + "."
             );
         }
 
@@ -340,7 +341,9 @@ namespace kvdb::modules::engine::standard {
         if (value.isSigned) {
             if (!signedNumberFitsIntoSignedBytes(value, targetByteLength)) {
                 return invalidValue(
-                    "Number does not fit into declared int byte count."
+                    "Number does not fit into declared int byte count. Limit: " +
+                    formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
+                    formatActualByteLength(value.byteLength) + "."
                 );
             }
 
@@ -354,7 +357,9 @@ namespace kvdb::modules::engine::standard {
 
         if (!unsignedNumberFitsIntoSignedBytes(value, targetByteLength)) {
             return invalidValue(
-                "Unsigned number does not fit into declared int byte count."
+                "Unsigned number does not fit into declared int byte count. Limit: " +
+                formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
+                formatActualByteLength(value.byteLength) + "."
             );
         }
 
@@ -366,12 +371,14 @@ namespace kvdb::modules::engine::standard {
         const std::uint16_t declaredByteLength
     ) {
         if (!isValidNumberByteLength(value.byteLength)) {
-            return invalidValue("Invalid number byte length.");
+            return invalidValue(
+                "Invalid number byte length: " + formatActualByteLength(value.byteLength) + ". Allowed range is 1..16 byte(s).");
         }
 
         if (declaredByteLength == 0 || declaredByteLength > MaxNumberByteLength) {
             return schemaMismatch(
-                "Declared uint byte count must be between 1 and 16."
+                "Declared uint byte count must be between 1 and 16. Actual: " +
+                std::to_string(declaredByteLength) + "."
             );
         }
 
@@ -384,7 +391,9 @@ namespace kvdb::modules::engine::standard {
 
             if (!unsignedNumberFitsIntoUnsignedBytes(value, targetByteLength)) {
                 return invalidValue(
-                    "Number does not fit into declared uint byte count."
+                    "Number does not fit into declared uint byte count. Limit: " +
+                    formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
+                    formatActualByteLength(value.byteLength) + "."
                 );
             }
 
@@ -393,7 +402,9 @@ namespace kvdb::modules::engine::standard {
 
         if (!unsignedNumberFitsIntoUnsignedBytes(value, targetByteLength)) {
             return invalidValue(
-                "Number does not fit into declared uint byte count."
+                "Number does not fit into declared uint byte count. Limit: " +
+                formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
+                formatActualByteLength(value.byteLength) + "."
             );
         }
 
@@ -566,7 +577,9 @@ namespace kvdb::modules::engine::standard {
             }
 
             if (expectedType.sizeParam != 0 && size > expectedType.sizeParam) {
-                return schemaMismatch("Charseq value is longer than the declared charseq size.");
+                return schemaMismatch(
+                    "Charseq value is longer than the declared charseq size. Limit: " + std::to_string(expectedType.sizeParam) +
+                    " byte(s). Actual: " + std::to_string(size) + " byte(s).");
             }
 
             StoredPrimitive result;
@@ -882,7 +895,12 @@ namespace kvdb::modules::engine::standard {
             result.number = NumberCmdValue{};
             result.number.isSigned = value.number.isSigned;
             result.number.byteLength = value.number.byteLength;
-            result.number.bytes = value.number.bytes;
+            result.number.bytes = {};
+            std::copy(
+                value.number.bytes.begin(),
+                value.number.bytes.end(),
+                result.number.bytes.begin()
+            );
             return result;
 
         case StoredPrimitiveKind::Bool:

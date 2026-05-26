@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,7 +36,7 @@ namespace kvdb::modules::engine::standard {
     {
         bool isSigned = false;
         std::uint8_t byteLength = 0;
-        std::array<std::uint8_t, 16> bytes{};
+        std::vector<std::uint8_t> bytes;
     };
 
     enum class StoredPrimitiveKind : std::uint8_t
