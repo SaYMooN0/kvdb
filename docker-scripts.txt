@@ -1,0 +1,5 @@
+﻿docker run -it -v kvdb_data:/data -p 9000-9100:9000-9100 kvdb manager
+docker run --rm kvdb unit-tests
+docker run --rm kvdb scenarios
+docker run --rm kvdb scenario transaction_rollback_scenario
+docker run --rm kvdb tests

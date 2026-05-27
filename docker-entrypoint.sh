@@ -25,15 +25,18 @@ case "$1" in
 
     scenario)
         shift
-
+    
         if [ -z "$1" ]; then
             echo "Usage: scenario <scenario_name>"
             echo "Available scenarios:"
             ls -1 /opt/kvdb/tests/scenarios
             exit 1
         fi
-
-        exec "/opt/kvdb/tests/scenarios/$1"
+    
+        scenario_name="$1"
+        shift
+    
+        exec "/opt/kvdb/tests/scenarios/$scenario_name" "$@"
         ;;
 
     tests)

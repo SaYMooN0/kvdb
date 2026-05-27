@@ -58,10 +58,10 @@ namespace {
         R"(In "users" Get "user-1")";
 
     constexpr const char* DEL_CMD =
-        R"(In "users" Del "user-1")";
+        R"(In "users" Delete "user-1")";
 
     constexpr const char* ERASE_TABLE_CMD =
-        R"(EraseTable "users")";
+        R"(Erase "users")";
 
     constexpr const char* TABLE_INFO_CMD =
         R"(TableInfo "users")";
@@ -109,7 +109,7 @@ TEST_CASE("query_parser: parse creates Get command") {
     requireParsedCmd(result, CmdKind::Get);
 }
 
-TEST_CASE("query_parser: parse creates Del command") {
+TEST_CASE("query_parser: parse creates Delete command") {
     auto parser = makeQueryParserForTests();
     REQUIRE(parser != nullptr);
 

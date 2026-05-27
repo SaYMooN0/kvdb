@@ -103,7 +103,7 @@ namespace {
         const std::string& tableName,
         const std::string& key
     ) {
-        return "In " + quoted(tableName) + " Del " + quoted(key);
+        return "In " + quoted(tableName) + " Delete " + quoted(key);
     }
 
     constexpr const char* BEGIN_CMD = "Begin";
@@ -313,7 +313,7 @@ TEST_CASE("engine: Set overwrites existing value", "[engine_tests]") {
     ) == secondValue);
 }
 
-TEST_CASE("engine: Del removes existing value", "[engine_tests]") {
+TEST_CASE("engine: Delete removes existing value", "[engine_tests]") {
     EngineTestEnv env;
 
     const std::string table = uniqueTableName("eng_del");

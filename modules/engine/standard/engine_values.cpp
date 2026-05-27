@@ -342,8 +342,7 @@ namespace kvdb::modules::engine::standard {
             if (!signedNumberFitsIntoSignedBytes(value, targetByteLength)) {
                 return invalidValue(
                     "Number does not fit into declared int byte count. Limit: " +
-                    formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
-                    formatActualByteLength(value.byteLength) + "."
+                    formatByteLimit(declaredByteLength) + "."
                 );
             }
 
@@ -358,8 +357,7 @@ namespace kvdb::modules::engine::standard {
         if (!unsignedNumberFitsIntoSignedBytes(value, targetByteLength)) {
             return invalidValue(
                 "Unsigned number does not fit into declared int byte count. Limit: " +
-                formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
-                formatActualByteLength(value.byteLength) + "."
+                formatByteLimit(declaredByteLength) + "."
             );
         }
 
@@ -392,8 +390,7 @@ namespace kvdb::modules::engine::standard {
             if (!unsignedNumberFitsIntoUnsignedBytes(value, targetByteLength)) {
                 return invalidValue(
                     "Number does not fit into declared uint byte count. Limit: " +
-                    formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
-                    formatActualByteLength(value.byteLength) + "."
+                    formatByteLimit(declaredByteLength) + "."
                 );
             }
 
@@ -403,8 +400,7 @@ namespace kvdb::modules::engine::standard {
         if (!unsignedNumberFitsIntoUnsignedBytes(value, targetByteLength)) {
             return invalidValue(
                 "Number does not fit into declared uint byte count. Limit: " +
-                formatByteLimit(declaredByteLength) + ". Actual encoded length: " +
-                formatActualByteLength(value.byteLength) + "."
+                formatByteLimit(declaredByteLength) + "."
             );
         }
 

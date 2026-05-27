@@ -2,7 +2,6 @@
 #include <fstream>
 #include <cctype>
 #include <chrono>
-#include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -32,6 +31,14 @@ namespace fs = std::filesystem;
 
 #ifndef KVDB_DIST_DIR
 #define KVDB_DIST_DIR "./dist"
+#endif
+
+#ifndef KVDB_INSTANCES_ROOT_DIR
+#ifdef _WIN32
+#define KVDB_INSTANCES_ROOT_DIR "."
+#else
+#define KVDB_INSTANCES_ROOT_DIR "/data"
+#endif
 #endif
 
 struct Instance
@@ -182,7 +189,15 @@ fs::path getDistRoot() {
     return fs::path(KVDB_DIST_DIR);
 }
 
+fs::path getInstancesRoot() {
+    return fs::path(KVDB_INSTANCES_ROOT_DIR);
+}
+
 fs::path getInstancesRegistryPath() {
+    return getInstancesRoot() / kInstancesRegistryFileName;
+}
+
+fs::path getLegacyInstancesRegistryPath() {
     return getDistRoot() / kInstancesRegistryFileName;
 }
 
@@ -262,6 +277,62 @@ bool hasRegisteredInstanceName(const std::string& name) {
     return findInstanceByName(name) != nullptr;
 }
 
+bool containsString(const std::vector<std::string>& values, const std::string& value) {
+    for (const auto& item : values) {
+        if (item == value)
+            return true;
+    }
+
+    return false;
+}
+
+bool looksLikeInstanceDirectory(const fs::path& instanceDir) {
+    std::error_code ec;
+
+    if (!fs::is_directory(instanceDir, ec))
+        return false;
+
+    return fs::exists(instanceDir / kInstanceSettingsFileName, ec)
+        && fs::exists(instanceDir / kDbInstanceFileName, ec);
+}
+
+bool registerExistingInstanceDirectory(const fs::path& instanceDir) {
+    if (!looksLikeInstanceDirectory(instanceDir))
+        return false;
+
+    const std::string name = instanceDir.filename().string();
+    const std::string parentPath = instanceDir.parent_path().string();
+
+    if (name.empty() || parentPath.empty())
+        return false;
+
+    if (hasRegisteredInstanceName(name))
+        return false;
+
+    instances.push_back({name, parentPath});
+    return true;
+}
+
+void discoverInstancesFromRoot(const fs::path& rootPath) {
+    std::error_code ec;
+
+    if (!fs::is_directory(rootPath, ec))
+        return;
+
+    fs::directory_iterator it(rootPath, ec);
+
+    if (ec) {
+        std::cout << "Failed to scan instances root: " << rootPath
+            << ". " << ec.message() << "\n";
+        return;
+    }
+
+    for (const auto& entry : it) {
+        if (entry.is_directory(ec))
+            registerExistingInstanceDirectory(entry.path());
+    }
+}
+
 bool saveInstancesRegistry() {
     const fs::path registryPath = getInstancesRegistryPath();
 
@@ -289,9 +360,7 @@ bool saveInstancesRegistry() {
     return true;
 }
 
-void loadInstancesRegistry() {
-    const fs::path registryPath = getInstancesRegistryPath();
-
+void loadInstancesRegistryFromFile(const fs::path& registryPath) {
     if (!fs::exists(registryPath))
         return;
 
@@ -315,14 +384,37 @@ void loadInstancesRegistry() {
         std::getline(lineStream, name, '\t');
         std::getline(lineStream, path);
 
+        name = trim(name);
+        path = trim(path);
+
         if (name.empty() || path.empty())
             continue;
 
         if (hasRegisteredInstanceName(name))
             continue;
 
+        const fs::path instanceDir = fs::path(path) / name;
+
+        if (!looksLikeInstanceDirectory(instanceDir))
+            continue;
+
         instances.push_back({name, path});
     }
+}
+
+void loadInstancesRegistry() {
+    const std::size_t beforeLoadCount = instances.size();
+
+    loadInstancesRegistryFromFile(getInstancesRegistryPath());
+
+    const fs::path legacyRegistryPath = getLegacyInstancesRegistryPath();
+    if (legacyRegistryPath != getInstancesRegistryPath())
+        loadInstancesRegistryFromFile(legacyRegistryPath);
+
+    discoverInstancesFromRoot(getInstancesRoot());
+
+    if (instances.size() != beforeLoadCount)
+        saveInstancesRegistry();
 }
 
 bool writeInstanceSettings(
@@ -417,7 +509,17 @@ bool createInstance(
     }
 
     if (fs::exists(instanceDir)) {
-        std::cout << "Instance already exists: " << instanceDir << "\n";
+        if (registerExistingInstanceDirectory(instanceDir)) {
+            if (!saveInstancesRegistry())
+                std::cout << "Warning: existing instance was registered, but registry was not saved\n";
+
+            std::cout << "Instance already exists on disk and was registered: "
+                << instanceDir << "\n";
+            return true;
+        }
+
+        std::cout << "Path already exists but is not a kvdb instance: "
+            << instanceDir << "\n";
         return false;
     }
 
@@ -574,6 +676,30 @@ bool isProcessRunning(const std::uint64_t pid) {
         return false;
 
     const auto nativePid = static_cast<pid_t>(pid);
+
+    // Important for Docker/Linux:
+    // kill(pid, 0) returns success for zombie children too.
+    // A background db_instance is a child of the manager, so we must reap it
+    // with waitpid(..., WNOHANG). Otherwise show/stop can keep treating an
+    // already-finished instance as running forever.
+    while (true) {
+        int status = 0;
+        const pid_t waitResult = waitpid(nativePid, &status, WNOHANG);
+
+        if (waitResult == nativePid) {
+            return false;
+        }
+
+        if (waitResult == 0) {
+            return true;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+
+        break;
+    }
 
     if (kill(nativePid, 0) == 0)
         return true;
@@ -1001,27 +1127,92 @@ void runInstance(
         std::cout << "Instance stopped\n";
 }
 
-void listModules(const std::string& moduleName) {
+void addModuleImplIfNotExists(
+    std::vector<std::string>& implNames,
+    const std::string& implName
+) {
+    if (!implName.empty() && !containsString(implNames, implName))
+        implNames.push_back(implName);
+}
+
+void collectBuiltModuleImpls(
+    const std::string& moduleName,
+    std::vector<std::string>& implNames
+) {
+    const fs::path builtModulesRoot = getDistRoot() / "modules";
+
+    std::error_code ec;
+    if (!fs::is_directory(builtModulesRoot, ec))
+        return;
+
+    const std::string prefix = moduleName + "_";
+    const std::string suffix = kModuleExtension;
+
+    fs::directory_iterator it(builtModulesRoot, ec);
+
+    if (ec) {
+        std::cout << "Failed to scan built modules directory: "
+            << builtModulesRoot << ". " << ec.message() << "\n";
+        return;
+    }
+
+    for (const auto& entry : it) {
+        if (!entry.is_regular_file(ec))
+            continue;
+
+        const std::string fileName = entry.path().filename().string();
+
+        if (!fileName.starts_with(prefix) || !fileName.ends_with(suffix))
+            continue;
+
+        const std::string implName = fileName.substr(
+            prefix.size(),
+            fileName.size() - prefix.size() - suffix.size()
+        );
+
+        addModuleImplIfNotExists(implNames, implName);
+    }
+}
+
+void collectSourceModuleImpls(
+    const std::string& moduleName,
+    std::vector<std::string>& implNames
+) {
     const fs::path moduleRoot = getSourceRoot() / "modules" / moduleName;
+
+    std::error_code ec;
+    if (!fs::is_directory(moduleRoot, ec))
+        return;
+
+    fs::directory_iterator it(moduleRoot, ec);
+
+    if (ec) {
+        std::cout << "Failed to scan source module directory: "
+            << moduleRoot << ". " << ec.message() << "\n";
+        return;
+    }
+
+    for (const auto& entry : it) {
+        if (entry.is_directory(ec))
+            addModuleImplIfNotExists(implNames, entry.path().filename().string());
+    }
+}
+
+void listModules(const std::string& moduleName) {
+    std::vector<std::string> implNames;
+
+    collectBuiltModuleImpls(moduleName, implNames);
+    collectSourceModuleImpls(moduleName, implNames);
 
     std::cout << moduleName << ":\n";
 
-    if (!fs::exists(moduleRoot)) {
+    if (implNames.empty()) {
         std::cout << "  (none)\n";
         return;
     }
 
-    bool foundAny = false;
-
-    for (const auto& p : fs::directory_iterator(moduleRoot)) {
-        if (p.is_directory()) {
-            foundAny = true;
-            std::cout << "  " << p.path().filename().string() << '\n';
-        }
-    }
-
-    if (!foundAny)
-        std::cout << "  (none)\n";
+    for (const auto& implName : implNames)
+        std::cout << "  " << implName << '\n';
 }
 
 void modulesCommand() {
@@ -1031,6 +1222,10 @@ void modulesCommand() {
     listModules("access_interface");
 }
 
+void printRunUsage() {
+    std::cout << "Usage: run [-b|--background] <name> [--port <port>|--port=<port>]\n";
+}
+
 void helpCommand() {
     std::cout << "Available commands:\n";
     std::cout << "  init\n";
@@ -1038,12 +1233,8 @@ void helpCommand() {
     std::cout << "      Inside init, type cancel, :cancel, abort, or :abort to leave safely.\n";
     std::cout << "  show\n";
     std::cout << "      Show registered instances and their runtime status.\n";
-    std::cout << "  run <name> [--port <port>]\n";
-    std::cout << "      Run registered instance in foreground. If port is not passed, a free port is chosen.\n";
-    std::cout << "  run -b <name> [--port <port>]\n";
-    std::cout << "      Run registered instance in background.\n";
-    std::cout << "  run <name> -b [--port <port>]\n";
-    std::cout << "      Same as run -b <name>.\n";
+    std::cout << "  run [-b|--background] <name> [--port <port>|--port=<port>]\n";
+    std::cout << "      Run registered instance. Without -b it runs in foreground; with -b it runs in background.\n";
     std::cout << "  stop <name>\n";
     std::cout << "      Gracefully stop running instance.\n";
     std::cout << "  modules\n";
@@ -1208,10 +1399,7 @@ Command constructRunCommand() {
         }
 
         if (name.empty()) {
-            std::cout << "Usage:\n";
-            std::cout << "  run <name> [--port <port>]\n";
-            std::cout << "  run -b <name> [--port <port>]\n";
-            std::cout << "  run <name> -b [--port <port>]\n";
+            printRunUsage();
             return;
         }
 
